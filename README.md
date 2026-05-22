@@ -7,7 +7,7 @@ license: apache-2.0
   <h1 align="center">SparseSAM: Structured Sparsification of Activations<br/>in Segment Anything Models</h1>
 
   <p align="center">
-    <a href="https://scholar.google.com/citations?user=FZH2vcEAAAAJ&hl=en"><strong>Hoai-Chau Tran</strong></a>
+    <a href="https://hchautran.github.io/"><strong>Hoai-Chau Tran</strong></a>
     ·
     <strong>Chi H. Nguyen</strong>
     ·
@@ -15,9 +15,9 @@ license: apache-2.0
     ·
     <a href="https://www.matlog.net/"><strong>Mathias Niepert</strong></a>
     ·
-    <a href="https://www.matlog.net/"><strong>Fan Lai</strong></a>
+    <a href="https://www.fanlai.me/"><strong>Fan Lai</strong></a>
     ·
-    <a href="https://www.matlog.net/"><strong>Khoa D Doan</strong></a>
+    <a href="https://mail-research.com/"><strong>Khoa D Doan</strong></a>
   </p>
 
   <p align="center">
@@ -250,9 +250,9 @@ Reports **Top-1 / Top-5 accuracy** plus the timing/memory triple.
 
 ## Example Results
 
-All numbers were **measured in this repo** (not copied from the paper) on
+All numbers were measured  on
 **NVIDIA A100X-20C (sm80)** · PyTorch 2.5.1 + CUDA 12.1 · SAM-HQ ViT-L ·
-batch=8 · full datasets (470 imgs DIS5K-VD, 500 imgs ThinObject5K-TE).
+batch=8. 
 
 ### Dense baseline
 
