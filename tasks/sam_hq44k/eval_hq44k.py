@@ -22,20 +22,30 @@ import wandb
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, "..", ".."))
 sys.path.insert(0, _REPO)
-sys.path.insert(0, os.path.join(_REPO, "sam-hq"))
-sys.path.insert(0, os.path.join(_REPO, "PiToMe"))
+sys.path.insert(0, os.path.join(_REPO, "algos", "3rd_party", "sam-hq"))
 
 from segment_anything import SamPredictor, sam_model_registry
 
-from sam_eval_utils import (
-    SAM_REGISTRY, VALID_ALGOS, ALGO_REGISTRY, SPARSESAM_ALGOS as _SPARSESAM_ALGOS,
-    apply_tome, remove_tome, update_ratio, reset_memory,
+from algos.registry import (
+    SAM_REGISTRY, sam_algo_choices,
     apply_sam, remove_all_sam, update_sam_ratio,
 )
 
+VALID_ALGOS = sam_algo_choices()
+_SPARSESAM_ALGOS = {n for n in SAM_REGISTRY if n.startswith("sparsesam")}
+
+
+def reset_memory():
+    """Release CUDA caches + reset peak-memory counter between sweep configs."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+
 from sam_engine import get_default_datasets
 from train.utils.dataloader import get_im_gt_name_dict, Resize
-from data_utils import OnlineDataset
+from utils.data_utils import OnlineDataset
 import train.utils.misc as misc
 from train.train import compute_iou, compute_boundary_iou
 
@@ -242,10 +252,10 @@ def run_sweep(
     print(f"{'='*80}\n")
 
     for algo, ratio in runs:
-        remove_tome(encoder, mask_decoder=mask_decoder)
-        if algo != "none":
-            apply_tome(encoder, algo=algo, ratio=ratio, margin=margin,
-                       mlp_merge=mlp_merge)
+        remove_all_sam(encoder, mask_decoder=mask_decoder)
+        if algo != "none" and ratio < 1.0:
+            apply_sam(encoder, algo, ratio=ratio, margin=margin,
+                      mlp_merge=mlp_merge)
 
         n_tokens = int(64 * 64 * ratio) if algo != "none" else 64 * 64
 
@@ -283,7 +293,7 @@ def run_sweep(
                       f"mIoU={result['miou']:.4f}  "
                       f"mem={result.get('peak_memory_allocated_mb', 0):.0f}MB")
 
-    remove_tome(encoder, mask_decoder=mask_decoder)
+    remove_all_sam(encoder, mask_decoder=mask_decoder)
     return all_results
 
 

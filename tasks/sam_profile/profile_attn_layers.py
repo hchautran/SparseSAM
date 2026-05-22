@@ -39,7 +39,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ── SAM imports ────────────────────────────────────────────────────────────────
-SAM1_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sam-hq")
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SAM1_PATH = os.path.join(_REPO, "algos", "3rd_party", "sam-hq")
 if SAM1_PATH not in sys.path:
     sys.path.insert(0, SAM1_PATH)
 

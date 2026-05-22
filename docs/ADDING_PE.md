@@ -18,19 +18,22 @@ covers PE-specific knobs.
 
 ## 1. Where the registry lives
 
-[`PiToMe/algo/registry.py`](../PiToMe/algo/registry.py). Each PE algorithm
-is one `PEAlgoSpec` entry:
+[`algos/registry.py`](../algos/registry.py). All backbones share one
+`AlgoSpec`; PE entries set `backbone="pe"`:
 
 ```python
 @dataclass
-class PEAlgoSpec:
+class AlgoSpec:
     name: str                          # CLI string (e.g. "tome_partial")
+    backbone: str                      # "pe" for PE entries
     apply: Callable                    # (model, **kwargs) -> Any
-    remove: Optional[Callable] = None  # only needed for back-compat
     kwargs_from_args: Optional[Callable] = None
     accepts_ratio: bool = True
-    description: str = ""
     category: str = "compress"         # "compress" | "partial" | "attention"
+    description: str = ""
+    # SAM-only fields (left as None for PE):
+    block_class: Optional[type] = None
+    attn_class:  Optional[type] = None
 ```
 
 Eval and profile scripts only ever call two functions from this module:
@@ -68,7 +71,7 @@ Two structural patch flavors live alongside each other in the codebase:
 PE blocks are split into N stages; between stages, a designated
 "compress" block runs the original block forward and then drops/merges
 tokens. Built on the base classes in
-[`_pe_stage.py`](../PiToMe/algo/_pe_stage.py):
+[`_pe_stage.py`](../algos/_pe_stage.py):
 
   * `FlashRopePEAttention(SelfAttention)` — slices `rope.freq` to the
     surviving tokens (`info["active_idx"]`) and optionally routes through
@@ -89,7 +92,7 @@ attention and/or merge → MLP → unmerge. No shared base class — each algo
 defines its own `<Algo>PEPartialAttention(SelfAttention)` and
 `<Algo>PEPartialBlock(ResidualAttentionBlock)` outright. The `apply`
 function walks `transformer.resblocks` and reassigns `__class__`, mirroring
-SAM almost exactly. See [tome/pe_partial.py](../PiToMe/algo/tome/pe_partial.py)
+SAM almost exactly. See [tome/pe_partial.py](../algos/tome/pe_partial.py)
 for the canonical example.
 
 ---
@@ -97,7 +100,7 @@ for the canonical example.
 ## 3. Walkthrough A — adding a stage-compress `mytome`
 
 ```python
-# PiToMe/algo/mytome/pe_compress.py
+# algos/mytome/pe_compress.py
 from .._pe_stage import (
     apply_stage_compress, FlashRopePEAttention, StageCompressPEBlock,
 )
@@ -136,27 +139,29 @@ def apply_pe_mytome_patch(model, ratio=0.7, num_stages=4,
 ```
 
 Imports stay at module top — same shape as the SAM patches.
-`_pe_stage.py` adds `perception_models/` to `sys.path` once at import
-time (mirroring what each SAM patch does for `sam-hq/`), so
+`_pe_stage.py` adds `algos/3rd_party/perception_models/` to `sys.path`
+once at import time (mirroring what each SAM patch does for
+`algos/3rd_party/sam-hq/`), so
 `core.vision_encoder.pe` resolves whether PE is pip-installed or only
 present as a submodule.
 
-Then register in [`registry.py`](../PiToMe/algo/registry.py)'s
-`_register_builtins()`:
+Then register in [`registry.py`](../algos/registry.py)'s `_register_pe()`:
 
 ```python
 from .mytome.pe_compress import apply_pe_mytome_patch
-register_pe(PEAlgoSpec(
+register(AlgoSpec(
     name="mytome",
+    backbone="pe",
     apply=apply_pe_mytome_patch,
-    kwargs_from_args=_kw_compress,
+    kwargs_from_args=_kw_pe_compress,
     category="compress",
     description="...",
 ))
 ```
 
-`remove` is optional — `remove_all_pe` walks the model and reverts any
-subclass of `ResidualAttentionBlock` / `SelfAttention` automatically.
+`remove_all_pe` walks the model and reverts any subclass of
+`ResidualAttentionBlock` / `SelfAttention` automatically — you don't need
+a per-spec `remove` callback.
 
 ---
 
@@ -166,7 +171,7 @@ A partial patch defines its own attention + block subclasses (not built on
 `StageCompressPEBlock`):
 
 ```python
-# PiToMe/algo/mytome/pe_partial.py
+# algos/mytome/pe_partial.py
 from .._pe_stage import (
     SelfAttention, ResidualAttentionBlock,
     _find_vision_transformer, _vit_uses_cls_token,
@@ -223,17 +228,18 @@ rather than importing directly from `core.vision_encoder.pe` — that keeps
 the path-mutation in one place.
 
 Compare this to SAM's
-[tome/sam.py](../PiToMe/algo/tome/sam.py) — the shape is identical
+[tome/sam.py](../algos/tome/sam.py) — the shape is identical
 (define subclasses, walk modules, reassign `__class__`, stash state).
 
 Register:
 
 ```python
 from .mytome.pe_partial import apply_pe_mytome_partial_patch
-register_pe(PEAlgoSpec(
+register(AlgoSpec(
     name="mytome_partial",
+    backbone="pe",
     apply=apply_pe_mytome_partial_patch,
-    kwargs_from_args=_kw_partial_basic,
+    kwargs_from_args=_kw_pe_partial_basic,
     category="partial",
     description="...",
 ))
@@ -291,9 +297,9 @@ on an ImageNet sweep:
 
 ```python
 import torch, sys
-sys.path.insert(0, '.'); sys.path.insert(0, 'perception_models')
+sys.path.insert(0, '.'); sys.path.insert(0, 'algos/3rd_party/perception_models')
 from core.vision_encoder import pe
-from PiToMe.algo.registry import apply_pe, remove_all_pe
+from algos.registry import apply_pe, remove_all_pe
 
 model = pe.CLIP.from_config("PE-Core-S16-384", pretrained=False).eval()
 
@@ -338,12 +344,12 @@ reference.
     `x.dtype`, you'll see fp32 instead of the model's fp16/bf16 and your
     cute-kernel cache key will miss. Key on the *weight* dtype instead —
     see `_kernel_dtype` in
-    [sparsesam/pe_partial.py](../PiToMe/algo/sparsesam/pe_partial.py). Or
+    [sparsesam/pe_partial.py](../algos/sparsesam/pe_partial.py). Or
     run with `--no-amp` to keep the whole forward in `--dtype`.
   * **`bipartite_soft_matching` halves at most per call** (`r ≤ T/2`).
     For `ratio < 0.5`, use `_chained_bipartite_match` from
-    [tome/pe_partial.py](../PiToMe/algo/tome/pe_partial.py) /
-    [gradtome/pe_partial.py](../PiToMe/algo/gradtome/pe_partial.py),
+    [tome/pe_partial.py](../algos/tome/pe_partial.py) /
+    [gradtome/pe_partial.py](../algos/gradtome/pe_partial.py),
     which composes multiple passes so the cumulative product equals the
     requested ratio.
   * **CLS handling** — pass `class_token=info["use_cls_token"]` to your

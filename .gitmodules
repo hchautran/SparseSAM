@@ -1,21 +1,12 @@
 [submodule "sam-hq"]
-	path = sam-hq 
-	url =   https://github.com/SysCV/sam-hq.git
-[submodule "PiToMe"]
-	path = PiToMe
-	url = git@github.com:hchautran/PiToMe.git
-[submodule "Block-Sparse-Attention"]
-	path = Block-Sparse-Attention
-	url = git@github.com:hchautran/Block-Sparse-Attention.git
+	path = algos/3rd_party/sam-hq
+	url = https://github.com/SysCV/sam-hq.git
 [submodule "perception_models"]
-	path = perception_models
+	path = algos/3rd_party/perception_models
 	url = https://github.com/facebookresearch/perception_models.git
-[submodule "sam3"]
-	path = sam3
-	url = https://github.com/facebookresearch/sam3.git
 [submodule "lmms-eval"]
-	path = lmms-eval
+	path = algos/3rd_party/lmms-eval
 	url = https://github.com/EvolvingLMMs-Lab/lmms-eval.git
 [submodule "SpargeAttn"]
-	path = SpargeAttn
+	path = algos/3rd_party/SpargeAttn
 	url = https://github.com/NguyenHuuChi/SpargeAttn

@@ -11,12 +11,10 @@ import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, "..", ".."))
-PM_ROOT = os.path.join(_REPO, "perception_models")
-PITOME_PATH = os.path.join(_REPO, "PiToMe")
-sys.path.insert(0, _REPO)                          # shared utils at repo root
-sys.path.insert(0, os.path.join(_REPO, "sam-hq"))  # registry eagerly registers SAM
+PM_ROOT = os.path.join(_REPO, "algos", "3rd_party", "perception_models")
+sys.path.insert(0, _REPO)                          # shared utils + algos package
+sys.path.insert(0, os.path.join(_REPO, "algos", "3rd_party", "sam-hq"))  # registry eagerly registers SAM
 sys.path.insert(0, PM_ROOT)
-sys.path.insert(0, PITOME_PATH)
 
 
 class CUDATimer:
@@ -145,10 +143,10 @@ def print_report(timers, n_runs, model_name, batch_size, n_blocks, stage_ends=No
 
 
 # PE patch dispatch — uses the central registry
-# (`PiToMe/algo/registry.py`). To add a new algorithm, register it there;
+# (`algos/registry.py`). To add a new algorithm, register it there;
 # this module needs no changes.
 
-from PiToMe.algo.registry import (
+from algos.registry import (
     PE_REGISTRY, algo_choices as _pe_choices,
     apply_pe as _registry_apply_pe, remove_all_pe as _registry_remove_all,
 )
@@ -313,7 +311,7 @@ def main():
     parser.add_argument('--tome-algo',   type=str, default='none',
                         choices=_pe_choices(),
                         help="Run a second pass with this algo and show comparison table. "
-                             "Choices come from PiToMe/algo/registry.py — see "
+                             "Choices come from algos/registry.py — see "
                              "docs/ADDING_ALGORITHMS.md for adding new ones.")
     parser.add_argument('--tome-ratio',  type=float, default=0.7,
                         help="Per-stage-boundary token-keep fraction in (0, 1].")

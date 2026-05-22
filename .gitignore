@@ -67,4 +67,6 @@ Makefile
 */CmakeFiles
 *.csv
 wandb/*
-
+.outputs/
+benchmark_results/
+CLAUDE.md

@@ -37,10 +37,9 @@ from torch.utils.data import DataLoader
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, "..", ".."))
-PM_ROOT = os.path.join(_REPO, "perception_models")
+PM_ROOT = os.path.join(_REPO, "algos", "3rd_party", "perception_models")
 PM_PE   = os.path.join(PM_ROOT, "apps", "pe")
-sys.path.insert(0, _REPO)                              # shared utils at repo root
-sys.path.insert(0, os.path.join(_REPO, "PiToMe"))      # PE algo registry
+sys.path.insert(0, _REPO)                              # shared utils + algos package
 sys.path.insert(0, PM_ROOT)                            # for `core.*`
 sys.path.insert(0, PM_PE)                              # for `clip_benchmark.*`
 
@@ -223,11 +222,11 @@ def evaluate_dataset(
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PE algorithm dispatch — delegates to the central registry
-# (`PiToMe/algo/registry.py`). To add a new algorithm, register it there;
+# (`algos/registry.py`). To add a new algorithm, register it there;
 # this module needs no changes.
 # ──────────────────────────────────────────────────────────────────────────────
 
-from PiToMe.algo.registry import (
+from algos.registry import (
     PE_REGISTRY, algo_choices as _pe_choices,
     apply_pe as _registry_apply_pe, remove_all_pe as _registry_remove_all,
 )
@@ -277,7 +276,7 @@ def main():
                    choices=_pe_choices(),
                    help="One or more PE patches to evaluate (sweep). "
                         "Registered algorithms are listed automatically — see "
-                        "`PiToMe/algo/registry.py` and `docs/ADDING_PE.md`.")
+                        "`algos/registry.py` and `docs/ADDING_PE.md`.")
     p.add_argument("--ratio", nargs="+", type=float, default=[0.5],
                    help="Keep-bar / keep-fraction in (0, 1] to sweep; lower = more compression")
     # Stage-compression knobs (consumed by `_kw_compress`)

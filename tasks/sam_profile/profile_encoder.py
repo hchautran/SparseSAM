@@ -35,17 +35,11 @@ import sys
 import numpy as np
 import torch
 
-# ── SAM 1 import ──────────────────────────────────────────────────────────────
-SAM1_PATH = os.path.join(os.path.dirname(__file__), 'sam-hq')
-sys.path.insert(0, SAM1_PATH)
-
-# ── SAM 2 import ──────────────────────────────────────────────────────────────
-SAM2_PATH = os.path.join(os.path.dirname(__file__), 'sam-hq', 'sam-hq2')
-sys.path.insert(0, SAM2_PATH)
-
-# ── ToMe import ───────────────────────────────────────────────────────────────
-PITOME_PATH = os.path.join(os.path.dirname(__file__), 'PiToMe')
-sys.path.insert(0, PITOME_PATH)
+# Repo root + sam-hq submodules on sys.path so SAM 1/2 + the algos package import.
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, 'algos', '3rd_party', 'sam-hq'))
+sys.path.insert(0, os.path.join(_REPO, 'algos', '3rd_party', 'sam-hq', 'sam-hq2'))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -315,12 +309,12 @@ def print_report_sam3(timers, n_runs, model_id, batch_size, vision_enc=None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_tome_patch(encoder, algo, ratio, margin):
-    from algo.sparsesam.patch.sam import apply_patch
+    from algos.sparsesam.sam import apply_patch
     apply_patch(encoder, algo=algo, ratio=ratio, margin=margin)
 
 
 def remove_tome_patch(encoder):
-    from algo.sparsesam.patch.sam import ToMeSAMBlock, ToMeSAMAttention
+    from algos.sparsesam.sam import ToMeSAMBlock, ToMeSAMAttention
     from segment_anything.modeling.image_encoder import Block, Attention
     for m in encoder.modules():
         if type(m) is ToMeSAMBlock:
@@ -333,7 +327,7 @@ def remove_tome_patch(encoder):
 
 def apply_fa2_patch(encoder):
     """Patch attention with FlashAttentionForwardAmpere; ratio=1.0 disables token merging."""
-    from algo.sparsesam.patch.sam import apply_patch
+    from algos.sparsesam.sam import apply_patch
     apply_patch(encoder, algo='tome', ratio=1.0)
 
 

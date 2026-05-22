@@ -15,19 +15,24 @@ If you haven't read the overview yet, start with
 
 ## 1. Where the registry lives
 
-[`PiToMe/algo/registry.py`](../PiToMe/algo/registry.py). Each SAM
-algorithm is one `SAMAlgoSpec` entry:
+[`algos/registry.py`](../algos/registry.py). All backbones share one
+`AlgoSpec`; SAM entries set `backbone="sam"` and use the SAM-only
+`block_class` / `attn_class` fields so `remove_all_sam` knows which
+subclasses to revert:
 
 ```python
 @dataclass
-class SAMAlgoSpec:
+class AlgoSpec:
     name: str
+    backbone: str                              # "sam" for SAM entries
     apply: Callable                            # (encoder, **kwargs) -> Any
-    block_class: Optional[type] = None         # subclass of Block
-    attn_class:  Optional[type] = None         # subclass of Attention
     kwargs_from_args: Optional[Callable] = None
     accepts_ratio: bool = True
+    category: str = "compress"
     description: str = ""
+    # SAM-only:
+    block_class: Optional[type] = None         # subclass of Block
+    attn_class:  Optional[type] = None         # subclass of Attention
 ```
 
 Eval scripts only call two functions from this module:
@@ -73,7 +78,7 @@ subclass must handle `self.window_size > 0` (windowed via
 `window_partition` / `window_unpartition`) and `self.window_size == 0`
 (plain dense attention). The sparsesam patch is a good reference for the
 two-branch shape — see
-[sparsesam/sam.py](../PiToMe/algo/sparsesam/sam.py)'s `ToMeSAMBlock.forward`.
+[sparsesam/sam.py](../algos/sparsesam/sam.py)'s `ToMeSAMBlock.forward`.
 
 ---
 
@@ -81,7 +86,7 @@ two-branch shape — see
 
 ### Step 1 — Write the patch
 
-`PiToMe/algo/<myalgo>/sam.py`:
+`algos/<myalgo>/sam.py`:
 
 ```python
 from segment_anything.modeling.image_encoder import (
@@ -126,31 +131,31 @@ def apply_patch(encoder: ImageEncoderViT,
 
 The full canonical skeleton (with windowed/global branches, ratio scheduling,
 and per-image cache reset) is in
-[tome/sam.py](../PiToMe/algo/tome/sam.py).
+[tome/sam.py](../algos/tome/sam.py).
 
 ### Step 2 — Register
 
-In [`registry.py`](../PiToMe/algo/registry.py)'s
-`_register_sam_builtins()`:
+In [`registry.py`](../algos/registry.py)'s `_register_sam()`:
 
 ```python
 from .myalgo.sam import (
     apply_patch as _patch_my,
     MyAlgoSAMBlock as _B, MyAlgoSAMAttention as _A,
 )
-register_sam(SAMAlgoSpec(
+register(AlgoSpec(
     name="myalgo",
-    apply=_wrap_apply_with_internal_algo(_patch_my, "tome"),
+    backbone="sam",
+    apply=_bake_sam_apply(_patch_my, "tome"),
     block_class=_B, attn_class=_A,
-    kwargs_from_args=_sam_kw_basic,
+    kwargs_from_args=_kw_sam_basic,
     description="What this patch does, one sentence.",
 ))
 ```
 
 What each piece does:
 
-  * **`_wrap_apply_with_internal_algo(_patch_my, "tome")`** — adapter that
-    calls `_patch_my(encoder, algo="tome", ratio=…, margin=…, **extra)`.
+  * **`_bake_sam_apply(_patch_my, "tome")`** — adapter that calls
+    `_patch_my(encoder, algo="tome", ratio=…, margin=…, **extra)`.
     The `"tome"` baked-in lets you reuse the same patch module for both
     `"tome"` and `"pitome"` flavors by registering twice with different
     internal algo strings (this is how
@@ -192,9 +197,9 @@ This catches shape mismatches, broken `remove`, and dtype issues in
 
 ```python
 import torch, sys
-sys.path.insert(0, '.'); sys.path.insert(0, 'sam-hq')
+sys.path.insert(0, '.'); sys.path.insert(0, 'algos/3rd_party/sam-hq')
 from segment_anything import sam_model_registry
-from PiToMe.algo.registry import apply_sam, remove_all_sam
+from algos.registry import apply_sam, remove_all_sam
 
 sam = sam_model_registry["vit_l"](checkpoint="./ckts/sam_hq_vit_l.pth").cuda().half()
 encoder = sam.image_encoder
@@ -233,13 +238,13 @@ out2, _ = encoder(x); print(torch.allclose(out, out2))   # remove worked
     both branches. The local branch typically does
     `window_partition` → patched attention → `window_unpartition`; the
     global branch runs patched attention on the full sequence. See
-    [sparsesam/sam.py](../PiToMe/algo/sparsesam/sam.py)'s
+    [sparsesam/sam.py](../algos/sparsesam/sam.py)'s
     `ToMeSAMBlock.forward` for the canonical two-branch shape.
   * **Per-image cache reset** — if your patch caches anything per image
     (token permutations, masks), reset it inside a wrapped
     `encoder.forward` so caches don't leak across images during a sweep.
     See `_patched_forward` in
-    [tome/sam.py](../PiToMe/algo/tome/sam.py) for the pattern.
+    [tome/sam.py](../algos/tome/sam.py) for the pattern.
   * **Profiler bypasses the registry** —
     [tasks/sam_profile/profile_encoder.py](../tasks/sam_profile/profile_encoder.py)
     imports `apply_patch` directly from `algo.sparsesam.sam`. To profile

@@ -19,17 +19,19 @@ new `forward()` methods on the existing modules.
 
 ## How the registry works
 
-Both backbones share a single registry at
-[PiToMe/algo/registry.py](../PiToMe/algo/registry.py). Each registered
-algorithm has a string name (the one you pass on the CLI), an
-`apply(model, …)` function that installs the patch, and a `remove(model)`
-function that puts the model back to baseline.
+All four backbones (PE, SAM, SigLIP, MViTv2) share a **single** unified
+registry at [algos/registry.py](../algos/registry.py). Each registered
+algorithm is one `AlgoSpec(name, backbone, apply, …)` entry, keyed by
+`(backbone, name)` inside `REGISTRY`. The dispatch wrappers
+`apply_pe / apply_sam / apply_siglip / apply_mvit` and their matching
+`remove_all_*` look up the right spec and forward.
 
 This means **adding a new algorithm is two steps**:
 
   1. Write the patch (an `apply` and a `remove` function — and optionally
      `Block`/`Attention` subclasses for SAM).
-  2. Register it with one `register_pe(...)` or `register_sam(...)` call.
+  2. Register it with one `register(AlgoSpec(name, backbone, apply, ...))`
+     call inside `_register_<backbone>()` in `algos/registry.py`.
 
 You don't touch any eval script. Once registered, the new name appears in
 `--algorithm` / `--algos` choices automatically, the eval loop sweeps it
@@ -60,42 +62,53 @@ in `_pe_stage.py` / `_pe_stage_sparse.py`, exposed as base classes
 ## File map
 
 ```
-PiToMe/algo/
-├── registry.py                 # ← central PE+SAM registry; register here
+algos/                          # in-repo Python package (no submodule, no install step)
+├── registry.py                 # ← unified PE / SAM / SigLIP / MViT registry; register here
 ├── _pe_stage.py                # PE stage-compression plumbing
 ├── _pe_stage_sparse.py         # PE block-sparse cute-kernel plumbing
+├── _siglip.py / _siglip_sparse.py  # SigLIP shared bases
+├── kernels/                    # fused cutlass-DSL CUDA kernels (FA2 + rel-pos / RoPE)
 ├── tome/                       # bipartite ToMe / PiToMe
 │   ├── merge.py                #   bipartite_soft_matching primitive
 │   ├── pe_compress.py          #   PE: drop tokens at stage boundaries
 │   ├── pe_partial.py           #   PE: full S; merged-K/V SDPA + merge/MLP/unmerge
-│   └── sam.py                  #   SAM-HQ patch
+│   ├── sam.py                  #   SAM-HQ patch
+│   └── siglip.py               #   SigLIP partial patch
 ├── gradtome/                   # gradient-aware matching variant
 │   ├── merge.py
 │   ├── pe_compress.py
 │   ├── pe_partial.py
 │   ├── sam.py
-│   └── sam_hilbert.py          #   Hilbert-order variant
-└── sparsesam/                  # Z-group / Hilbert sparsesam
-    ├── pe_compress.py
-    ├── pe_partial.py
+│   ├── sam_hilbert.py          #   Hilbert-order variant
+│   └── siglip.py
+├── sparsesam/                  # Z-group / Hilbert sparsesam
+│   ├── pe_compress.py
+│   ├── pe_partial.py
+│   ├── sam.py
+│   ├── sam_random.py           #   random-keep ablation baseline
+│   ├── siglip.py
+│   ├── mvit.py                 #   MViTv2 patch
+│   └── patch/                  #   SAM2 (sam2_hiera) / SAM3 (sam3_vit) patches
+└── sparge/                     # SpargeAttn drop-in sparse attention
     ├── sam.py
-    └── sam_random.py           #   random-keep ablation baseline
+    ├── pe.py
+    └── siglip.py
 
 tasks/                          # ← eval / profile scripts grouped by task
 ├── pe_imagenet/                # PE zero-shot CLIP (ImageNet, etc.)
 ├── sam_hq44k/                  # SAM-HQ throughput + mIoU on HQ44K-style sets
-├── sam_coco/                   # SAM-HQ on COCO val2017 with GT-box prompts
-└── sam_profile/                # SAM per-component profilers
+├── sam_profile/                # SAM per-component profilers
+├── siglip_imagenet/            # SigLIP zero-shot / retrieval eval
+└── mvit_imagenet/              # MViTv2 ImageNet eval
 
 # Repo root (shared by all tasks)
-sam_eval_utils.py               # SAM apply/remove shims (used by both SAM tasks)
 sam_engine.py                   # SAM-HQ default-datasets helper
 data_utils.py                   # OnlineDataset + augmentations
 ```
 
 ### Naming conventions
 
-The filename inside a `PiToMe/algo/<algo>/` folder tells you what the
+The filename inside a `algos/<algo>/` folder tells you what the
 patch does:
 
   * **`pe_compress.py`** — PE stage-compression (token count drops at the
@@ -120,9 +133,9 @@ matter where you call it from. Most knobs (model name, batch size,
 algorithms to sweep, ratios) are env-overridable in the shell wrapper.
 
 You can also call the `.py` directly — each one resolves
-`_REPO = ../..` from `__file__` and adds `PiToMe/`, `sam-hq/`, and
-`perception_models/` to `sys.path` automatically, so it works from any
-directory.
+`_REPO = ../..` from `__file__` and adds the repo root,
+`algos/3rd_party/sam-hq/`, and `algos/3rd_party/perception_models/` to
+`sys.path` automatically, so it works from any directory.
 
 ```bash
 # via wrapper (with optional env-var overrides)
