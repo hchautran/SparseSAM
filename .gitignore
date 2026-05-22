@@ -69,4 +69,7 @@ Makefile
 wandb/*
 .outputs/
 benchmark_results/
+# Claude Code local artifacts
 CLAUDE.md
+.claude/
+.claude.json
