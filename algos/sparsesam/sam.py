@@ -178,7 +178,6 @@ def _get_fa2_compiled(
     ct_mask, t_mask = _SPARSE_MASK_CACHE[mask_key]
 
     if key not in _FA2_COMPILED:
-        # fa2 = FlashAttentionForwardAmpere(D, m_block, n_block, threads, win)
         _FA2_COMPILED[key] = cute.compile(
             FlashAttentionForwardAmpere(D, m_block, n_block, threads, win),
             q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c, ct_mask, scale, cu_stream,

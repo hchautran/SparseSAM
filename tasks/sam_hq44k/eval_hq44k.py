@@ -43,7 +43,7 @@ def reset_memory():
         torch.cuda.reset_peak_memory_stats()
 
 
-from sam_engine import get_default_datasets
+from utils.data_utils import get_default_datasets
 from train.utils.dataloader import get_im_gt_name_dict, Resize
 from utils.data_utils import OnlineDataset
 import train.utils.misc as misc

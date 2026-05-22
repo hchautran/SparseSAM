@@ -1,10 +1,10 @@
 """Unified algorithm registry for the SparseSAM + baselines workflow.
 
 One `AlgoSpec` dataclass, one `REGISTRY` keyed by `(backbone, name)`, and a
-single `register()` entry point. Per-backbone helpers (`apply_pe`,
-`apply_sam`, `apply_siglip`, `apply_mvit` + matching `remove_all_*`) are
-thin wrappers that exist because each backbone has a different stock-class
-set that `remove_all_*` walks; the *apply* side is fully generic.
+single `register()` entry point. Per-backbone helpers (`apply_pe` / `apply_sam`
++ matching `remove_all_*`) are thin wrappers that exist because each backbone
+has a different stock-class set that `remove_all_*` walks; the *apply* side
+is fully generic.
 
 Adding a new algorithm: write the patch, then add one `register(AlgoSpec(...))`
 call inside `_register_builtins()` below. See `docs/ADDING_ALGORITHMS.md`.
@@ -17,14 +17,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Spec + registry
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class AlgoSpec:
     name: str
-    backbone: str                              # "pe" | "sam" | "siglip" | "mvit"
+    backbone: str                              # "sam" | "pe"
     apply: Callable[..., Any]
     kwargs_from_args: Optional[Callable[[Any, Optional[float]], dict]] = None
     accepts_ratio: bool = True
@@ -62,17 +58,12 @@ def spec_of(backbone: str, name: str) -> Optional[AlgoSpec]:
     return REGISTRY.get((backbone, name))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Generic apply / per-backbone wrappers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _apply(model, backbone: str, name: str, args=None,
            ratio: Optional[float] = None, **extra):
     if name == "none":
         return None
-    # SAM treats ratio>=1.0 as a no-op (full token count = nothing to merge).
     if backbone == "sam" and ratio is not None and ratio >= 1.0:
-        return None
+        return None  # ratio>=1.0 ⇒ keep all tokens, nothing to merge
 
     spec = spec_of(backbone, name)
     if spec is None:
@@ -97,28 +88,12 @@ def apply_pe(model, name, args=None, ratio=None):
 def apply_sam(encoder, name, args=None, ratio=None, **extra):
     return _apply(encoder, "sam", name, args, ratio, **extra)
 
-def apply_siglip(model, name, args=None, ratio=None):
-    return _apply(model, "siglip", name, args, ratio)
 
-def apply_mvit(model, name, args=None, ratio=None):
-    return _apply(model, "mvit", name, args, ratio)
+def algo_choices()     -> List[str]: return choices("pe")
+def sam_algo_choices() -> List[str]: return choices("sam")
 
-
-def algo_choices()        -> List[str]: return choices("pe")
-def sam_algo_choices()    -> List[str]: return choices("sam")
-def siglip_algo_choices() -> List[str]: return choices("siglip")
-def mvit_algo_choices()   -> List[str]: return choices("mvit")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-backbone remove_all_*: revert subclassed modules to their stock classes
-# and clear patch state. Each backbone has a different stock-class set, so
-# they can't share a single implementation cleanly.
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _revert_subclasses(model, stock_classes: Tuple[type, ...]) -> int:
-    """For each module that is a strict subclass of any stock class, reassign
-    `module.__class__` back to that stock class. Returns revert count."""
     n = 0
     for module in model.modules():
         cls = type(module)
@@ -140,13 +115,11 @@ def _safe_delattr(obj, *attrs):
 
 
 def remove_all_pe(model) -> int:
-    """Idempotently undo every PE patch. Reverts PE subclasses to
-    `SelfAttention` / `ResidualAttentionBlock`, removes registered hooks,
-    and clears per-module caches. Safe to call before each sweep config."""
+    """Revert every PE patch and clear per-module patch state. Idempotent."""
     try:
         from core.vision_encoder.pe import SelfAttention, ResidualAttentionBlock
     except Exception:
-        return 0  # PE not importable -- nothing to revert.
+        return 0
 
     n = _revert_subclasses(model, (SelfAttention, ResidualAttentionBlock))
     for module in model.modules():
@@ -194,32 +167,8 @@ def update_sam_ratio(encoder, ratio: float):
         encoder.tome_info["ratio"] = ratio
 
 
-def remove_all_siglip(model) -> int:
-    """Idempotently revert subclassed SiglipAttention / SiglipEncoderLayer
-    modules and clear patch state."""
-    try:
-        from transformers.models.siglip.modeling_siglip import (
-            SiglipAttention, SiglipEncoderLayer,
-        )
-    except Exception:
-        return 0
-
-    n = _revert_subclasses(model, (SiglipAttention, SiglipEncoderLayer))
-    for module in model.modules():
-        _safe_delattr(module, "_tome_info")
-    _safe_delattr(model, "_tome_info")
-    return n
-
-
-def remove_all_mvit(model) -> int:
-    from .sparsesam.mvit import remove_mvit_sparsesam_partial_patch
-    return remove_mvit_sparsesam_partial_patch(model)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# kwargs_from_args helpers — translate argparse Namespace + sweep `ratio`
-# into the kwarg dict each patch's `apply_*` function expects.
-# ─────────────────────────────────────────────────────────────────────────────
+# kwargs_from_args helpers translate (argparse.Namespace, ratio) into the
+# kwarg dict each patch's apply_* expects. Names follow `_kw_<backbone>_<flavor>`.
 
 def _kw_pe_compress(args, ratio):
     cab = getattr(args, "compress_at_blocks", None)
@@ -261,17 +210,7 @@ def _kw_sparge_ratio(args, ratio):
     )
 
 
-def _kw_siglip_sparge(args, ratio):
-    return dict(
-        ratio=float(ratio if ratio is not None
-                    else (args.ratio[0] if hasattr(args, "ratio") else 1.0)),
-        start_block=int(getattr(args, "partial_start_block", 0)),
-    )
-
-
 def _kw_sam_basic(args, ratio):
-    """SAM patches share an (algo, ratio, margin, mlp_merge) shape; the `algo`
-    string is baked in at registration time by `_bake_sam_apply`."""
     return dict(
         ratio=float(ratio if ratio is not None else args.ratios[0]),
         margin=float(getattr(args, "margin", 0.5)),
@@ -279,20 +218,10 @@ def _kw_sam_basic(args, ratio):
     )
 
 
-def _kw_mvit_partial_sparsesam(args, ratio):
-    return dict(
-        ratio=float(ratio if ratio is not None else args.ratio[0]),
-        group_size=int(getattr(args, "group_size", 4)),
-        start_block=int(getattr(args, "partial_start_block", 0)),
-        mlp_merge=bool(getattr(args, "mlp_merge", True)),
-    )
-
-
 def _bake_sam_apply(apply_fn, internal_algo: str):
-    """Wrap a SAM patch's `apply_patch(encoder, algo=, ratio=, margin=, ...)`
-    with `algo` baked in. Optional kwargs (e.g. `mlp_merge`) are forwarded
-    only to patches whose signature accepts them — legacy patches without
-    the option keep working unchanged."""
+    """Wrap a SAM patch's `apply_patch` with `algo=internal_algo` pre-bound.
+    Optional kwargs are forwarded only when accepted by the patch signature,
+    so older patches without `mlp_merge` (etc.) keep working unchanged."""
     accepted = set(inspect.signature(apply_fn).parameters)
 
     def _apply_baked(encoder, ratio, margin=0.5, **extra):
@@ -304,19 +233,12 @@ def _bake_sam_apply(apply_fn, internal_algo: str):
     return _apply_baked
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Built-in algorithm registration.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Per-algo registration errors (missing dep, etc.). Keyed by f"{backbone}:{name}".
-# Inspect after import to see what got skipped on a given host.
+# Per-algo registration errors (keyed by "backbone:name"); inspect after
+# import to see what got skipped when an optional dep is missing.
 REGISTRATION_ERRORS: Dict[str, Exception] = {}
 
 
 def _safe_register(backbone, name, import_and_make_spec):
-    """Import the patch module and build+register an AlgoSpec. Tolerates
-    per-algo ImportError so other algos in the same backbone keep working
-    when an optional dep is missing on this host."""
     try:
         spec = import_and_make_spec()
         register(spec)
@@ -375,8 +297,6 @@ def _register_pe():
 
 
 def _register_sam():
-    # Each (module-importer, registration-emitter) pair is wrapped in its own
-    # try/except so one missing dep doesn't tank the whole backbone.
     def _from_tome():
         from .tome.sam import (apply_patch as fn,
             ToMeSAMBlock as B, ToMeSAMAttention as A)
@@ -432,80 +352,25 @@ def _register_sam():
         _safe_register("sam", name, mk)
 
 
-def _register_siglip():
-    def mk_sparsesam_partial():
-        from .sparsesam.siglip import apply_siglip_sparsesam_partial_patch
-        return AlgoSpec("sparsesam_partial", "siglip",
-            apply_siglip_sparsesam_partial_patch,
-            kwargs_from_args=_kw_pe_partial_sparsesam, category="partial",
-            description="Cute block-sparse FA2 (no RoPE) + uniform-stride z-order perm.")
-    def mk_tome_partial():
-        from .tome.siglip import apply_siglip_tome_partial_patch
-        return AlgoSpec("tome_partial", "siglip",
-            apply_siglip_tome_partial_patch,
-            kwargs_from_args=_kw_pe_partial_basic, category="partial",
-            description="Full-Q + ToMe-merged-K/V SDPA + optional merge/MLP/unmerge.")
-    def mk_gradtome_partial():
-        from .gradtome.siglip import apply_siglip_gradtome_partial_patch
-        return AlgoSpec("gradtome_partial", "siglip",
-            apply_siglip_gradtome_partial_patch,
-            kwargs_from_args=_kw_pe_partial_basic, category="partial",
-            description="Spatial-gradient bipartite matching on the patch grid.")
-    def mk_sparge():
-        from .sparge.siglip import apply_siglip_sparge_patch
-        return AlgoSpec("sparge", "siglip",
-            apply_siglip_sparge_patch,
-            kwargs_from_args=_kw_siglip_sparge, category="attention",
-            description="SpargeAttn top-k sparse attention swap. No RoPE step.")
-
-    for name, mk in (("sparsesam_partial", mk_sparsesam_partial),
-                     ("tome_partial",      mk_tome_partial),
-                     ("gradtome_partial",  mk_gradtome_partial),
-                     ("sparge",            mk_sparge)):
-        _safe_register("siglip", name, mk)
-
-
-def _register_mvit():
-    def mk():
-        from .sparsesam.mvit import apply_mvit_sparsesam_partial_patch
-        return AlgoSpec("sparsesam_partial", "mvit",
-            apply_mvit_sparsesam_partial_patch,
-            kwargs_from_args=_kw_mvit_partial_sparsesam, category="partial",
-            description="MLP-side broadcast merge → MLP → unmerge on post-attention "
-                        "residual stream.")
-    _safe_register("mvit", "sparsesam_partial", mk)
-
-
 def _register_builtins():
-    """Register each backbone. Per-algorithm failures (missing dep, etc.)
-    are caught inside `_safe_register` and stashed in `REGISTRATION_ERRORS`
-    so the rest of the registry keeps working."""
     _register_pe()
     _register_sam()
-    _register_siglip()
-    _register_mvit()
 
 
 _register_builtins()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Back-compat aliases (kept so callers that import per-backbone registries by
-# name keep working). These are live views computed once at import time.
-# ─────────────────────────────────────────────────────────────────────────────
-
-PE_REGISTRY     = specs_for("pe")
-SAM_REGISTRY    = specs_for("sam")
-SIGLIP_REGISTRY = specs_for("siglip")
-MVIT_REGISTRY   = specs_for("mvit")
+# Back-compat per-backbone registry views (live snapshots taken at import time).
+PE_REGISTRY  = specs_for("pe")
+SAM_REGISTRY = specs_for("sam")
 
 
 __all__ = [
     "AlgoSpec", "REGISTRY", "REGISTRATION_ERRORS",
     "register", "specs_for", "spec_of", "choices",
-    "apply_pe", "apply_sam", "apply_siglip", "apply_mvit",
-    "remove_all_pe", "remove_all_sam", "remove_all_siglip", "remove_all_mvit",
+    "apply_pe", "apply_sam",
+    "remove_all_pe", "remove_all_sam",
     "update_sam_ratio",
-    "algo_choices", "sam_algo_choices", "siglip_algo_choices", "mvit_algo_choices",
-    "PE_REGISTRY", "SAM_REGISTRY", "SIGLIP_REGISTRY", "MVIT_REGISTRY",
+    "algo_choices", "sam_algo_choices",
+    "PE_REGISTRY", "SAM_REGISTRY",
 ]

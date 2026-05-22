@@ -61,8 +61,7 @@ def _chained_bipartite_match(metric: torch.Tensor, ratio: float,
     return merge_chained, unmerge_chained
 
 
-# ── Subclasses ───────────────────────────────────────────────────────────
-
+# Subclasses
 class TomePEPartialAttention(SelfAttention):
     """Full-Q + ToMe-merged-K/V SDPA. Match is built from `x` so its `T`
     matches `k_flat.shape[1]`; cached on `info` for the block to reuse."""

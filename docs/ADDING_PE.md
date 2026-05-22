@@ -346,20 +346,11 @@ reference.
     see `_kernel_dtype` in
     [sparsesam/pe_partial.py](../algos/sparsesam/pe_partial.py). Or
     run with `--no-amp` to keep the whole forward in `--dtype`.
-  * **`bipartite_soft_matching` halves at most per call** (`r ≤ T/2`).
-    For `ratio < 0.5`, use `_chained_bipartite_match` from
-    [tome/pe_partial.py](../algos/tome/pe_partial.py) /
-    [gradtome/pe_partial.py](../algos/gradtome/pe_partial.py),
-    which composes multiple passes so the cumulative product equals the
-    requested ratio.
   * **CLS handling** — pass `class_token=info["use_cls_token"]` to your
     matcher so the CLS token isn't dropped or merged. The flag is set by
     `apply_stage_compress` / `apply_pe_*_patch` based on whether the
     underlying `VisionTransformer` uses CLS.
-  * **RoPE under compression** — when tokens get dropped, the surviving
-    tokens' positions shift. `FlashRopePEAttention` re-indexes
-    `rope.freq` from the `active_idx` you return. Stage-compress patches
-    just need to return the new `active_idx`; the plumbing does the rest.
+
   * **Cute kernel availability** — `_get_kernel(dtype, head_dim)` returns
     `(None, None, None)` when no `_BLOCK_CANDIDATES` tile satisfies
     `can_implement` on the target GPU (typically due to SMEM or thread

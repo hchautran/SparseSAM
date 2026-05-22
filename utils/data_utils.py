@@ -75,3 +75,26 @@ class OnlineDataset(Dataset):
         sample['ori_im'] = ori_im
 
         return sample
+
+
+def get_default_datasets():
+    """Default HQ-44K-style dataset configurations consumed by tasks/sam_hq44k/*."""
+    return [
+        {
+            "name":   "DIS5K-VD",
+            "im_dir": "./data/DIS5K/DIS-VD/im",
+            "gt_dir": "./data/DIS5K/DIS-VD/gt",
+            "im_ext": ".jpg",
+            "gt_ext": ".png",
+        },
+        {
+            "name":   "ThinObject5K-TE",
+            "im_dir": "./data/thin_object_detection/ThinObject5K/images_test",
+            "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
+            "im_ext": ".jpg",
+            "gt_ext": ".png",
+        },
+        # To add COIFT / HRSOD / ECSSD / MSRA-10K, append the same {name, im_dir,
+        # gt_dir, im_ext, gt_ext} dict. FSS-1000 and DUTS-* are skipped due to
+        # incompatible mask formats (RGBA / continuous-value masks).
+    ]

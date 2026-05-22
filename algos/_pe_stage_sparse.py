@@ -1,17 +1,3 @@
-"""Block-sparse FA2+RoPE stage compression (sibling of `_pe_stage.py`).
-
-Adds banded-diagonal + keep-bar attention mask + uniform-stride perm.
-Pre-compress blocks fall through to stock SDPA. Each compress block
-permutes its output once; downstream blocks reuse that layout.
-
-Provides:
-  * `SparseRopePEAttention(SelfAttention)` — sparse cute-kernel attention.
-  * `StageCompressSparsePEBlock(ResidualAttentionBlock)` — base for stage-end
-    blocks. Subclasses override `compress(x, active_idx, info)
-    -> (x, new_active_idx)`.
-  * `apply_stage_compress_sparse(...)` — installs subclasses on the matching
-    modules. Mirrors SAM-side `apply_patch` shape.
-"""
 
 from __future__ import annotations
 import math
@@ -28,14 +14,6 @@ from .sparsesam.z_utils import get_z_order
 
 _PERM_CACHE: dict = {}             # (S, ratio, gs, n_blk, has_cls, device) -> (perm, inv)
 _SPARSE_MASK_CACHE: dict = {}      # (B, H, T, ratio, m_blk, n_blk, band, scale, device)
-
-# Defaults selected via the SigLIP autoresearch sweep
-# (`tasks/siglip_imagenet/improve_sparsesam.py`, 100+ iterations on
-# COCO 5K retrieval). Best config: `kbs=2.0, band=3` lifted i2t-sum
-# from 2.4166 → 2.4824 (+6.6%) on siglip2-base-patch16-512 at r=0.5,
-# sb=5, attn-only. PE retains compatible behavior — these knobs only
-# widen the kept attention region; values matter most when num_n is
-# small and individual queries see few keys.
 _DIAG_BAND_WIDTH = 3
 _KEEP_BAR_SCALE = 2.0
 
@@ -293,8 +271,7 @@ def _sdpa_with_active_rope(self_attn, x, attn_mask, active_idx):
         self_attn.rope.freq = orig_freq
 
 
-# ── Attention subclass ───────────────────────────────────────────────────
-
+# Attention subclass
 class SparseRopePEAttention(SelfAttention):
     """Sparse FA2+RoPE attention.
 
@@ -360,8 +337,7 @@ class SparseRopePEAttention(SelfAttention):
         return out
 
 
-# ── Block base class ─────────────────────────────────────────────────────
-
+# Block base class
 class StageCompressSparsePEBlock(ResidualAttentionBlock):
     """Stage-end block for sparse-attn compression.
 
@@ -415,8 +391,7 @@ class StageCompressSparsePEBlock(ResidualAttentionBlock):
         return x
 
 
-# ── Per-forward state ────────────────────────────────────────────────────
-
+# Per-forward state
 def _reset_state_hook(info):
     def _hook(_module, _inputs):
         info["active_idx"] = None
@@ -440,8 +415,7 @@ def _transformer_unpermute_post_hook(info):
     return _hook
 
 
-# ── apply_stage_compress_sparse ──────────────────────────────────────────
-
+# apply_stage_compress_sparse
 def apply_stage_compress_sparse(model: nn.Module,
                                 compress_block_class: type,
                                 attn_class: type,

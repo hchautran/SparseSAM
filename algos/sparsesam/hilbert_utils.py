@@ -31,12 +31,7 @@ import math
 from functools import lru_cache
 
 import torch
-
-
-# ─────────────────────────────────────────────────────────────────
 # Low-level Hilbert encode / decode  (Skilling's algorithm)
-# ─────────────────────────────────────────────────────────────────
-
 def _h_to_transposed(H: torch.Tensor, n: int, p: int) -> torch.Tensor:
     X = torch.zeros(*H.shape, n, dtype=torch.int64, device=H.device)
     for i in range(p):
@@ -108,12 +103,7 @@ def encode(coords: torch.Tensor, num_dims: int, num_bits: int) -> torch.Tensor:
     """(N, num_dims) integer coordinates → Hilbert indices."""
     X = _forward_hilbert_transform(coords.to(torch.int64), num_dims, num_bits)
     return _transposed_to_h(X, num_dims, num_bits)
-
-
-# ─────────────────────────────────────────────────────────────────
 # Grid-level helpers
-# ─────────────────────────────────────────────────────────────────
-
 @lru_cache(maxsize=64)
 def _compute_hilbert_order(H: int, W: int, device_str: str):
     """

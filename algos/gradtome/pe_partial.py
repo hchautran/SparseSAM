@@ -116,8 +116,7 @@ def _chained_bipartite_match(metric: torch.Tensor, ratio: float,
     return merge_chained, unmerge_chained
 
 
-# ── Subclasses ───────────────────────────────────────────────────────────
-
+# Subclasses
 class GradTomePEPartialAttention(SelfAttention):
     """SelfAttention with full Q and GradToMe-merged K/V."""
 

@@ -167,61 +167,36 @@ def tile_stride_matching(
     n_keep  = n_groups - n_merge
 
     with torch.no_grad():
-        B, _ , C = x.shape
-        device  = x.device
+        B, _, C = x.shape
+        device = x.device
 
-        # ── 1. Full-channel Sobel gradient (matches merge.py get_sobel_gradient) ──
-        # Flatten batch×channel into a single batch dim so we need only one kernel.
-        x_bchw = x.reshape(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
-        x_flat = x_bchw.reshape(B * C, 1, H, W)                       # (B*C, 1, H, W)
-
-        sobel_x_k = torch.tensor(
-            [[-1., 0, 1], [-2., 0, 2], [-1., 0, 1]],
-            device=device, dtype=torch.float16
-        ).view(1, 1, 3, 3)
-        sobel_y_k = torch.tensor(
-            [[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]],
-            device=device, dtype=torch.float16
-        ).view(1, 1, 3, 3)
-
+        # Sobel magnitude per token: full-channel Sobel via one batched conv,
+        # then L2-pool across channels to a (B, N) raster.
+        x_bchw = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
+        x_flat = x_bchw.reshape(B * C, 1, H, W)
+        sobel_x_k = torch.tensor([[-1., 0, 1], [-2., 0, 2], [-1., 0, 1]],
+                                  device=device, dtype=torch.float16).view(1, 1, 3, 3)
+        sobel_y_k = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]],
+                                  device=device, dtype=torch.float16).view(1, 1, 3, 3)
         gx = F.conv2d(x_flat, sobel_x_k, padding=1).reshape(B, C, H, W)
         gy = F.conv2d(x_flat, sobel_y_k, padding=1).reshape(B, C, H, W)
-        # L2 across channels → (B, N) raster
         sobel_flat = torch.sqrt((gx**2 + gy**2).mean(dim=1)).reshape(B, N)
 
-        # ── 2. Reorder to Hilbert curve ───────────────────────────────────────
-        # perm[hilbert_pos] = raster_idx  →  x_hilbert = x_raster[:, perm]
-        perm = get_hilbert_order(H, W, device=device)       # (N,)
-        sobel_z = sobel_flat[:, perm]                       # (B, N) Hilbert order
+        # Group by Hilbert curve, rank groups by mean Sobel: lowest = merge.
+        perm = get_hilbert_order(H, W, device=device)
+        sobel_z = sobel_flat[:, perm]
+        grp_sobel = sobel_z.view(B, n_groups, gs).mean(-1)
+        grp_rank = grp_sobel.argsort(dim=-1)
+        merge_grps = grp_rank[:, :n_merge]
+        keep_grps  = grp_rank[:, n_merge:]
 
-        # ── 3. Per-group mean Sobel magnitude ─────────────────────────────────
-        grp_sobel = sobel_z.view(B, n_groups, gs).mean(-1)  # (B, n_groups)
-
-        # ── 4. Rank groups ascending → lowest gradient = merge candidates ─────
-        grp_rank   = grp_sobel.argsort(dim=-1)                    # (B, n_groups)
-        merge_grps = grp_rank[:, :n_merge]                         # (B, n_merge)
-        keep_grps  = grp_rank[:, n_merge:]                         # (B, n_keep)
-
-
-        # ── 5. Raster token indices per Hilbert group ─────────────────────────
-        # Hilbert group g occupies Hilbert positions [g*gs, (g+1)*gs).
-        # perm[g*gs : (g+1)*gs] gives the raster indices for group g.
-        group_raster = perm.view(n_groups, gs)                     # (n_groups, gs)
-        # breakpoint()  # disabled by autoresearch agent (user-authorized)
-
-        # Merge group raster indices: (B, n_merge, gs)
-        merge_raster = group_raster[merge_grps.reshape(-1)].reshape(B, n_merge, gs)
-        merge_flat   = merge_raster.reshape(B, n_merge * gs)       # (B, n_merge*gs)
-
-        # Keep group raster indices: (B, n_keep*gs)
-        keep_raster = group_raster[keep_grps.reshape(-1)].reshape(B, n_keep, gs)
-        keep_flat   = keep_raster.reshape(B, n_keep * gs)          # (B, n_keep*gs)
-
-        # Permute order: all z-order groups sorted ascending by gradient (lowest first),
-        # each group's tokens contiguous in z-order — no transpose/interleave.
-        full_perm     = group_raster[grp_rank.reshape(-1)].reshape(B, N)          # (B, N)
-        full_inv_perm = full_perm.argsort(dim=1)                                  # (B, N)
-        # breakpoint()  # disabled by autoresearch agent (user-authorized)
+        # Raster indices per group; full permutation = groups sorted ascending
+        # by gradient with each group's tokens contiguous in z-order.
+        group_raster = perm.view(n_groups, gs)
+        merge_flat = group_raster[merge_grps.reshape(-1)].reshape(B, n_merge * gs)
+        keep_flat  = group_raster[keep_grps.reshape(-1)].reshape(B, n_keep * gs)
+        full_perm     = group_raster[grp_rank.reshape(-1)].reshape(B, N)
+        full_inv_perm = full_perm.argsort(dim=1)
 
     n_keep_flat = n_keep * gs
 
@@ -244,25 +219,20 @@ def tile_stride_matching(
 
     def unmerge(x_out: torch.Tensor, mode: str = None) -> torch.Tensor:
         Bx, _, Cx = x_out.shape
-
         if mode == 'permute':
             idx = full_inv_perm.unsqueeze(-1).expand(Bx, N, Cx)
-            return x_out.gather(1, idx)                             # (B, N, C)
+            return x_out.gather(1, idx)
 
-        keep_out  = x_out[:, :n_keep_flat, :]                      # (B, n_keep*gs, C)
-        merge_out = x_out[:, n_keep_flat:, :]                      # (B, n_merge, C)
-
+        keep_out  = x_out[:, :n_keep_flat, :]
+        merge_out = x_out[:, n_keep_flat:, :]
         out = torch.zeros(Bx, N, Cx, device=x_out.device, dtype=x_out.dtype)
 
-        # Scatter keep tokens back to their original raster positions
         k_idx = keep_flat.unsqueeze(-1).expand(Bx, n_keep_flat, Cx)
         out.scatter_(1, k_idx, keep_out)
 
-        # Broadcast each group representative to all gs group members
         m_exp = merge_out.unsqueeze(2).expand(Bx, n_merge, gs, Cx)
         m_idx = merge_flat.unsqueeze(-1).expand(Bx, n_merge * gs, Cx)
         out.scatter_(1, m_idx, m_exp.reshape(Bx, n_merge * gs, Cx))
-
         return out
 
     return merge, unmerge

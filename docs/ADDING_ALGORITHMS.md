@@ -19,12 +19,12 @@ new `forward()` methods on the existing modules.
 
 ## How the registry works
 
-All four backbones (PE, SAM, SigLIP, MViTv2) share a **single** unified
+Both supported backbones (**SAM** and **PE**) share a single unified
 registry at [algos/registry.py](../algos/registry.py). Each registered
 algorithm is one `AlgoSpec(name, backbone, apply, …)` entry, keyed by
 `(backbone, name)` inside `REGISTRY`. The dispatch wrappers
-`apply_pe / apply_sam / apply_siglip / apply_mvit` and their matching
-`remove_all_*` look up the right spec and forward.
+`apply_pe / apply_sam` and their matching `remove_all_*` look up the
+right spec and forward.
 
 This means **adding a new algorithm is two steps**:
 
@@ -63,47 +63,37 @@ in `_pe_stage.py` / `_pe_stage_sparse.py`, exposed as base classes
 
 ```
 algos/                          # in-repo Python package (no submodule, no install step)
-├── registry.py                 # ← unified PE / SAM / SigLIP / MViT registry; register here
+├── registry.py                 # ← unified PE / SAM registry; register here
 ├── _pe_stage.py                # PE stage-compression plumbing
 ├── _pe_stage_sparse.py         # PE block-sparse cute-kernel plumbing
-├── _siglip.py / _siglip_sparse.py  # SigLIP shared bases
 ├── kernels/                    # fused cutlass-DSL CUDA kernels (FA2 + rel-pos / RoPE)
 ├── tome/                       # bipartite ToMe / PiToMe
 │   ├── merge.py                #   bipartite_soft_matching primitive
 │   ├── pe_compress.py          #   PE: drop tokens at stage boundaries
 │   ├── pe_partial.py           #   PE: full S; merged-K/V SDPA + merge/MLP/unmerge
-│   ├── sam.py                  #   SAM-HQ patch
-│   └── siglip.py               #   SigLIP partial patch
+│   └── sam.py                  #   SAM-HQ patch
 ├── gradtome/                   # gradient-aware matching variant
 │   ├── merge.py
 │   ├── pe_compress.py
 │   ├── pe_partial.py
 │   ├── sam.py
-│   ├── sam_hilbert.py          #   Hilbert-order variant
-│   └── siglip.py
+│   └── sam_hilbert.py          #   Hilbert-order variant
 ├── sparsesam/                  # Z-group / Hilbert sparsesam
 │   ├── pe_compress.py
 │   ├── pe_partial.py
 │   ├── sam.py
-│   ├── sam_random.py           #   random-keep ablation baseline
-│   ├── siglip.py
-│   ├── mvit.py                 #   MViTv2 patch
-│   └── patch/                  #   SAM2 (sam2_hiera) / SAM3 (sam3_vit) patches
+│   └── sam_random.py           #   random-keep ablation baseline
 └── sparge/                     # SpargeAttn drop-in sparse attention
     ├── sam.py
-    ├── pe.py
-    └── siglip.py
+    └── pe.py
 
 tasks/                          # ← eval / profile scripts grouped by task
 ├── pe_imagenet/                # PE zero-shot CLIP (ImageNet, etc.)
-├── sam_hq44k/                  # SAM-HQ throughput + mIoU on HQ44K-style sets
-├── sam_profile/                # SAM per-component profilers
-├── siglip_imagenet/            # SigLIP zero-shot / retrieval eval
-└── mvit_imagenet/              # MViTv2 ImageNet eval
+├── sam_hq44k/                  # SAM-HQ throughput + mIoU on HQ-44K
+├── sam_coco/                   # (TBD) SAM-HQ on COCO val2017
+└── sam_profile/                # SAM per-component profilers
 
-# Repo root (shared by all tasks)
-sam_engine.py                   # SAM-HQ default-datasets helper
-data_utils.py                   # OnlineDataset + augmentations
+utils/                          # data_utils.py (OnlineDataset + get_default_datasets), etc.
 ```
 
 ### Naming conventions

@@ -32,7 +32,7 @@ sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "algos", "3rd_party", "sam-hq"))
 
 from segment_anything import SamPredictor, sam_model_registry
-from sam_engine import get_default_datasets
+from utils.data_utils import get_default_datasets
 from train.utils.dataloader import get_im_gt_name_dict, Resize
 from utils.data_utils import OnlineDataset
 import train.utils.misc as misc

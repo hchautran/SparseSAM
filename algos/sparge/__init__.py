@@ -16,12 +16,7 @@ q/k before the kernel) so the PE patch is a faithful SDPA swap.
 Constraints:
 - head_dim ∈ {64, 128}. SAM-HQ ViT-B/L (head_dim=64) ✓; ViT-H (80) ✗.
 - sequence length ≥ 128.
+
+Submodules are imported lazily by the registry so that loading just
+`algos.sparge.sam` does NOT drag in `algos.sparge.pe`'s PE dep.
 """
-
-from .sam import SpargeSAMAttention, apply_patch  # noqa: F401
-from .pe import SpargePEAttention, apply_pe_sparge_patch, remove_pe_sparge_patch  # noqa: F401
-
-__all__ = [
-    "SpargeSAMAttention", "apply_patch",
-    "SpargePEAttention", "apply_pe_sparge_patch", "remove_pe_sparge_patch",
-]

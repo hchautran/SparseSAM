@@ -31,12 +31,7 @@ import math
 from functools import lru_cache
 
 import torch
-
-
-# ─────────────────────────────────────────────────────────────────
 # Low-level Z-curve encode / decode (Morton coding)
-# ─────────────────────────────────────────────────────────────────
-
 def encode(coords: torch.Tensor, num_dims: int, num_bits: int) -> torch.Tensor:
     """
     (N, num_dims) integer coordinates → Z-curve (Morton) indices.
@@ -66,12 +61,7 @@ def decode(z_indices: torch.Tensor, num_dims: int, num_bits: int) -> torch.Tenso
             # Place it at position i of j-th coordinate
             coords[:, j] |= bit << i
     return coords
-
-
-# ─────────────────────────────────────────────────────────────────
 # Grid-level helpers
-# ─────────────────────────────────────────────────────────────────
-
 @lru_cache(maxsize=64)
 def _compute_z_order(H: int, W: int, device_str: str):
     """

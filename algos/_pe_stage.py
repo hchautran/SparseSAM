@@ -1,24 +1,4 @@
-"""Shared PE patching primitives.
 
-Provides:
-  * Cute-kernel helpers (`flash_rope_attn`, `_get_kernel`) for fused
-    FA2 + RoPE attention.
-  * `FlashRopePEAttention(SelfAttention)` — drop-in attention subclass that
-    slices `rope.freq` to `info["active_idx"]` (so RoPE indices follow
-    surviving tokens after compression) and optionally routes through the
-    cute kernel.
-  * `FlashRopeOnlyPEAttention(SelfAttention)` — pure cute-kernel swap, no
-    compression awareness (used by the `flash_rope` algo).
-  * `StageCompressPEBlock(ResidualAttentionBlock)` — base for
-    stage-end blocks. Subclasses override `compress(x, active_idx, info)
-    -> (x, new_active_idx)` to define the merge rule.
-  * `apply_stage_compress(...)` — installs subclasses on the matching
-    modules. Mirrors SAM-side `apply_patch` shape.
-
-Patches on PE follow the SAM convention: subclass + reassign
-`module.__class__`. `remove_all_pe` (in `registry.py`) walks the model and
-reverts every registered subclass back to `SelfAttention` / `ResidualAttentionBlock`.
-"""
 
 from __future__ import annotations
 import os
@@ -278,11 +258,6 @@ def _vit_uses_cls_token(model: nn.Module) -> bool:
     return False
 
 
-# ── Attention subclasses ─────────────────────────────────────────────────
-#
-# State is read from `self._tome_info`, which is set by the corresponding
-# `apply_*` function. Same convention as SAM.
-
 class FlashRopePEAttention(SelfAttention):
     """SelfAttention that respects `info['active_idx']` (so RoPE follows
     surviving tokens after compression), and optionally routes through
@@ -332,8 +307,6 @@ class FlashRopeOnlyPEAttention(SelfAttention):
         return out
 
 
-# ── Block base class for stage-end compression ──────────────────────────
-
 class StageCompressPEBlock(ResidualAttentionBlock):
     """Base for stage-end blocks. Runs the original block forward, then
     calls `self.compress(x, active_idx, info) -> (x, new_active_idx)`.
@@ -354,13 +327,10 @@ class StageCompressPEBlock(ResidualAttentionBlock):
         return x
 
 
-# ── Stage cache (cos/sin slice for surviving tokens) ─────────────────────
-
 @torch.no_grad()
 def _build_stage_cache(self_attn: nn.Module, S: int, dtype: torch.dtype,
                        active_idx: Optional[torch.Tensor]) -> dict:
-    """Pre-build cos/sin (sliced down to the active subset) for the fused-
-    kernel path so subsequent blocks in the same stage just reuse them."""
+    """Pre-slice cos/sin to the active subset for cute-kernel reuse."""
     kernel, _m_blk, _n_blk = _get_kernel(dtype, self_attn.head_dim)
     if kernel is None:
         return {}
@@ -379,16 +349,12 @@ def _build_stage_cache(self_attn: nn.Module, S: int, dtype: torch.dtype,
     }
 
 
-# ── Per-forward state reset ──────────────────────────────────────────────
-
 def _reset_active_idx_hook(info):
     def _hook(_module, _inputs):
         info["active_idx"] = None
         info["_stage_cache"] = None
     return _hook
 
-
-# ── apply_stage_compress: the convenience installer ──────────────────────
 
 def apply_stage_compress(model: nn.Module,
                          compress_block_class: type,
@@ -462,8 +428,6 @@ def apply_stage_compress(model: nn.Module,
     return len(stage_ends)
 
 
-# ── Flash-rope-only patch (no compression) ───────────────────────────────
-
 def apply_pe_flash_rope_patch(model: nn.Module, verbose: bool = True) -> int:
     """Replace every PE SelfAttention with `FlashRopeOnlyPEAttention`. No
     token compression. Falls back at runtime if the cute kernel can't be
@@ -488,9 +452,7 @@ def apply_pe_flash_rope_patch(model: nn.Module, verbose: bool = True) -> int:
     return n
 
 
-# Per-patch remove functions are no longer needed: `remove_all_pe` in
-# `registry.py` walks the model and reverts every registered subclass.
-# These wrappers exist for back-compat with code that imports them.
+# Thin back-compat shims — registry's `remove_all_pe` does the actual work.
 
 def remove_stage_compress(model: nn.Module) -> int:
     from .registry import remove_all_pe

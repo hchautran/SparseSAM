@@ -100,17 +100,20 @@ algos/                          # all algorithm code + vendored upstream models
     └── lmms-eval/                  (unused; kept for archival)
 
 tasks/                          # eval / profile entry points, grouped by task
-├── sam_hq44k/                    SAM-HQ on HQ-44K 
+├── sam_hq44k/                    SAM-HQ on HQ-44K
 ├── sam_coco/                     SAM-HQ on MS-COCO val2017 with GT-box prompts
 ├── sam_profile/                  SAM per-component / per-attn-layer profilers
-├── pe_imagenet/                  PE zero-shot CLIP eval + per-block profiler
+└── pe_imagenet/                  PE zero-shot CLIP eval + per-block profiler
 
 utils/                          # shared data loading + benchmark helpers
 docs/                           # contributor docs — start here when adding an algo
 benchmark_results/              # CSV outputs + saved plots
-ckts/  sam2_ckts/  sam2_configs/   # checkpoints + configs
-data/                              # DIS5K, thin_object_detection, coco, imagenet, …
+ckts/                           # SAM-HQ checkpoints
+data/                           # DIS5K, thin_object_detection, coco, imagenet, …
 ```
+
+Only **SAM** (SAM-HQ ViT) and **PE** (Perception Encoder) backbones are
+supported. MViT, SigLIP, SAM2, SAM3 support has been removed from this repo.
 
 All compression algorithms are runtime patches: they monkey-patch the encoder's
 transformer blocks at apply time and revert cleanly, so the original checkpoints
@@ -163,7 +166,6 @@ Expected layout for data and checkpoints:
 
 ```
 ckts/                            SAM-HQ: sam_hq_vit_{t,b,l,h}.pth
-sam2_ckts/                       SAM2 / SAM2.1
 data/DIS5K/                      high-detail segmentation
 data/thin_object_detection/      COIFT, HRSOD, ThinObject5K
 data/coco/                       COCO val2017 + annotations
@@ -186,13 +188,13 @@ apply_sam(sam.image_encoder, name="sparsesam", ratio=0.5)   # density 50%
 remove_all_sam(sam.image_encoder)                            # revert to baseline
 ```
 
-`apply_pe`, `apply_siglip`, `apply_mvit` (+ matching `remove_all_*`) follow the same shape. The registry advertises every algorithm: `sparsesam`, `sparsesam_pitome`, `sparsesam_random`, `tome`, `pitome`, `gradtome`, `gradtome_pitome`, `gradtome_hilbert`, `sparge`. See [`docs/ADDING_ALGORITHMS.md`](docs/ADDING_ALGORITHMS.md) for adding new ones.
+`apply_pe` + `remove_all_pe` follow the same shape for the Perception Encoder backbone. The registry advertises every algorithm: `sparsesam`, `sparsesam_pitome`, `sparsesam_random`, `tome`, `pitome`, `gradtome`, `gradtome_pitome`, `gradtome_hilbert`, `sparge`. See [`docs/ADDING_ALGORITHMS.md`](docs/ADDING_ALGORITHMS.md) for adding new ones.
 
 > **Interactive demo:** [`notebooks/sparsesam_demo.ipynb`](notebooks/sparsesam_demo.ipynb) — applies SparseSAM on a single image, sweeps density, and runs a per-block profile (attention vs MLP, windowed vs global) with side-by-side mask plots.
 
 ### SAM HQ-44K segmentation
 
-High-fidelity segmentation on DIS5K-VD, COIFT, ThinObject5K-TE, HRSOD (HQ-44K). Patches `model.image_encoder` (SAM-HQ ViT) or `model.image_encoder.trunk` (SAM2.1 Hiera).
+High-fidelity segmentation on DIS5K-VD, COIFT, ThinObject5K-TE, HRSOD (HQ-44K). Patches `model.image_encoder` (SAM-HQ ViT).
 
 ```python
 from algos.registry import apply_sam
@@ -412,4 +414,4 @@ This work builds on:
 - **[PiToMe](https://github.com/hchautran/PiToMe)** (NeurIPS 2024) — sister project, energy-margin variant of ToMe; the registry + per-algo file conventions in this repo are direct descendants.
 - **[SpargeAttn](https://github.com/thu-ml/SpargeAttn)** — top-k attention-mass sparsification kernel, integrated as the `sparge` baseline.
 - **[StructSAM (GradToMe)](https://arxiv.org/abs/2603.07307)** — gradient-aware bipartite matching variant, integrated as the `gradtome` baseline.
-- **[Perception Encoder](https://github.com/facebookresearch/perception_models)** — Meta's PE backbone used for the ImageNet / SigLIP / VQA evaluation tracks.
+- **[Perception Encoder](https://github.com/facebookresearch/perception_models)** — Meta's PE backbone used for the ImageNet zero-shot CLIP evaluation track.

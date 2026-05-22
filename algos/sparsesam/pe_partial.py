@@ -83,8 +83,7 @@ def _kernel_dtype(self_attn) -> torch.dtype:
     return torch.float16
 
 
-# ── Subclasses ───────────────────────────────────────────────────────────
-
+# Subclasses
 class SparsesamPEPartialAttention(SelfAttention):
     """Block-sparse cute kernel attention. Expects permuted layout
     (the block forward did this once at encoder entry); falls back to
@@ -199,8 +198,7 @@ class SparsesamPEPartialBlock(ResidualAttentionBlock):
         return x
 
 
-# ── Per-forward state ────────────────────────────────────────────────────
-
+# Per-forward state
 def _reset_state_hook(info):
     def _hook(_module, _inputs):
         info["x_is_permuted"] = False
