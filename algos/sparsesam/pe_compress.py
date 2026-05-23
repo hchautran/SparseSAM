@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 
 from .z_utils import get_z_order
-from .._pe_stage import (
+from ..pe_base import (
     apply_stage_compress, FlashRopePEAttention, StageCompressPEBlock,
     apply_pe_flash_rope_patch, remove_pe_flash_rope_patch,
     flash_rope_attn,

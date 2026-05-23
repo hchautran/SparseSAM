@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 from .merge import bipartite_soft_matching, do_nothing
-from .._pe_stage import (
+from ..pe_base import (
     apply_stage_compress, FlashRopePEAttention, StageCompressPEBlock,
 )
 

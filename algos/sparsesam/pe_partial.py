@@ -9,13 +9,10 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from .. import _pe_stage as _ps
-from .._pe_stage import (
+from ..pe_base import (
     SelfAttention, ResidualAttentionBlock,
     _ensure_cute_deps, _get_kernel, _module_cached_cos_sin,
     _find_vision_transformer, _vit_uses_cls_token,
-)
-from .._pe_stage_sparse import (
     _make_A_mask, _get_uniform_stride_perm, flash_rope_sparse_attn,
     _ensure_block_mask,
 )

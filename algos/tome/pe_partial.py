@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from .._pe_stage import (
+from ..pe_base import (
     SelfAttention, ResidualAttentionBlock,
     _find_vision_transformer, _vit_uses_cls_token,
 )

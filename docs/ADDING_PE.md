@@ -71,7 +71,7 @@ Two structural patch flavors live alongside each other in the codebase:
 PE blocks are split into N stages; between stages, a designated
 "compress" block runs the original block forward and then drops/merges
 tokens. Built on the base classes in
-[`_pe_stage.py`](../algos/_pe_stage.py):
+[`algos/pe_base/`](../algos/pe_base/):
 
   * `FlashRopePEAttention(SelfAttention)` — slices `rope.freq` to the
     surviving tokens (`info["active_idx"]`) and optionally routes through
@@ -101,7 +101,7 @@ for the canonical example.
 
 ```python
 # algos/mytome/pe_compress.py
-from .._pe_stage import (
+from ..pe_base import (
     apply_stage_compress, FlashRopePEAttention, StageCompressPEBlock,
 )
 
@@ -139,7 +139,7 @@ def apply_pe_mytome_patch(model, ratio=0.7, num_stages=4,
 ```
 
 Imports stay at module top — same shape as the SAM patches.
-`_pe_stage.py` adds `algos/3rd_party/perception_models/` to `sys.path`
+`algos/pe_base/` adds `algos/3rd_party/perception_models/` to `sys.path`
 once at import time (mirroring what each SAM patch does for
 `algos/3rd_party/sam-hq/`), so
 `core.vision_encoder.pe` resolves whether PE is pip-installed or only
@@ -172,7 +172,7 @@ A partial patch defines its own attention + block subclasses (not built on
 
 ```python
 # algos/mytome/pe_partial.py
-from .._pe_stage import (
+from ..pe_base import (
     SelfAttention, ResidualAttentionBlock,
     _find_vision_transformer, _vit_uses_cls_token,
 )
@@ -223,7 +223,7 @@ def apply_pe_mytome_partial_patch(model, ratio=0.7, start_block=0,
     return n_blocks - sb
 ```
 
-Re-export `SelfAttention` and `ResidualAttentionBlock` from `_pe_stage`
+Re-export `SelfAttention` and `ResidualAttentionBlock` from `pe_base`
 rather than importing directly from `core.vision_encoder.pe` — that keeps
 the path-mutation in one place.
 
@@ -268,9 +268,11 @@ your `apply` function expects. Pre-built builders for the common cases:
 
 | Builder | Patch shape | CLI flags it forwards |
 |---|---|---|
-| `_kw_compress` | stage compression | `--num-stages`, `--group-size`, `--use-flash-rope`, `--compress-at-blocks` |
-| `_kw_partial_basic` | partial w/o sparse-attn | `--partial-start-block`, `--mlp-merge` |
-| `_kw_partial_sparsesam` | partial + sparsesam mask | above + `--group-size`, `--sparse-ratio` |
+| `_kw_pe_compress` | stage compression | `--num-stages`, `--group-size`, `--use-flash-rope`, `--compress-at-blocks` |
+| `_kw_pe_partial_basic` | partial w/o sparse-attn | `--partial-start-block`, `--mlp-merge` |
+| `_kw_pe_partial_sparsesam` | partial + sparsesam mask | above + `--group-size`, `--sparse-ratio` |
+| `_kw_pe_flash_rope` | attention-only fused FA2+RoPE | (none; `accepts_ratio=False`) |
+| `_kw_sparge_ratio` | SpargeAttn drop-in | `--ratio` (forwarded as `topk`) |
 
 If your algorithm needs a CLI option that doesn't yet exist, add it in
 **both** [eval_pe_clip.py](../tasks/pe_imagenet/eval_pe_clip.py) and
@@ -282,8 +284,9 @@ If your algorithm needs a CLI option that doesn't yet exist, add it in
 ## 7. Categories and gating
 
   * **`"compress"`** — token count drops at boundaries. One run per ratio.
-  * **`"partial"`** — full token count preserved. Eligible for
-    `--sweep-mlp-merge` (which doubles the run grid by toggling `mlp_merge`).
+  * **`"partial"`** — full token count preserved. The `--mlp-merge` /
+    `--no-mlp-merge` flag toggles the residual-consistency MLP path; run
+    both to isolate the MLP-compression contribution.
   * **`"attention"`** — pure attention-kernel swap, no token math. Usually
     `accepts_ratio=False` so it runs once per sweep (e.g. `flash_rope`).
 
@@ -323,9 +326,12 @@ class assignment.
 ## 9. Sweep + plot trade-off curves
 
 ```bash
-ALGOS_SWEEP="tome_partial mytome_partial gradtome_partial" \
-RATIOS_SWEEP="0.9 0.7 0.5 0.4 0.3 0.25" \
-sh tasks/pe_imagenet/eval_pe.sh
+python tasks/pe_imagenet/eval_pe_clip.py \
+    --model PE-Core-L14-336 \
+    --dataset imagenet1k --dataset-root ./data/imagenet \
+    --dtype fp16 --batch-size 128 \
+    --algorithm none tome_partial mytome_partial gradtome_partial \
+    --ratio 0.9 0.7 0.5 0.4 0.3 0.25
 
 python tasks/pe_imagenet/plot_pe_partial.py ./benchmark_results/pe_clip_*.csv \
     --metric acc1 --x ratio --out ./benchmark_results/pe_partial_tradeoff.png

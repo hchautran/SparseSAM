@@ -2,11 +2,9 @@
 
 This walks through adding a new token-compression patch to the **SAM-HQ**
 evaluation pipeline. Once registered, the algorithm appears automatically
-in
-[tasks/sam_hq44k/eval_hq44k.py](../tasks/sam_hq44k/eval_hq44k.py) (HQ44K
-mIoU/throughput sweep) and
-[tasks/sam_coco/eval_coco.py](../tasks/sam_coco/eval_coco.py) (COCO
-val2017 with GT-box prompts).
+in [tasks/sam_hq44k/eval_hq44k.py](../tasks/sam_hq44k/eval_hq44k.py) (HQ44K
+mIoU / throughput sweep). A COCO eval entry point at `tasks/sam_coco/` is
+planned but not yet ported in this repo.
 
 If you haven't read the overview yet, start with
 [ADDING_ALGORITHMS.md](ADDING_ALGORITHMS.md).
@@ -165,28 +163,23 @@ What each piece does:
     them — old patches without the option keep working.
   * **`block_class=_B, attn_class=_A`** — what `remove_all_sam` looks for
     when reverting the subclassing.
-  * **`kwargs_from_args=_sam_kw_basic`** — the standard adapter forwards
+  * **`kwargs_from_args=_kw_sam_basic`** — the standard adapter forwards
     `--ratio`, `--margin`, `--mlp-merge`. If your patch needs more
-    knobs, add them to both eval scripts' argparse and write a custom
+    knobs, add them to the eval script's argparse and write a custom
     builder.
 
 ### Step 3 — Run
 
-Both eval scripts pick the new name up automatically:
+The HQ44K eval picks up the new name automatically:
 
 ```bash
 python tasks/sam_hq44k/eval_hq44k.py --algos myalgo --ratios 0.9 0.7 \
     --batch-sizes 1 2 4 --num-samples 100 \
     --model-ckt ./ckts/sam_hq_vit_l.pth --model-type vit_l
-
-python tasks/sam_coco/eval_coco.py --algos myalgo --ratios 0.9 0.7 \
-    --coco-root ./data/coco --num-images 200 --ap \
-    --model-ckt ./ckts/sam_hq_vit_l.pth --model-type vit_l
 ```
 
 `eval_hq44k.py` reports throughput, per-image encoder latency, peak
-memory, mIoU, and Boundary IoU. `eval_coco.py` reports per-instance
-mIoU/B-IoU on GT-box prompts and (with `--ap`) COCO segm AP.
+memory, mIoU, and Boundary IoU.
 
 ---
 
@@ -247,6 +240,6 @@ out2, _ = encoder(x); print(torch.allclose(out, out2))   # remove worked
     [tome/sam.py](../algos/tome/sam.py) for the pattern.
   * **Profiler bypasses the registry** —
     [tasks/sam_profile/profile_encoder.py](../tasks/sam_profile/profile_encoder.py)
-    imports `apply_patch` directly from `algo.sparsesam.sam`. To profile
+    imports `apply_patch` directly from `algos.sparsesam.sam`. To profile
     a new algorithm there, edit the script's `apply_tome_patch` /
     `remove_tome_patch` to point at your patch module.
