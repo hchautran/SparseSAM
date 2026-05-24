@@ -24,7 +24,7 @@ covers PE-specific knobs.
 ```python
 @dataclass
 class AlgoSpec:
-    name: str                          # CLI string (e.g. "tome_partial")
+    name: str                          # CLI string (e.g. "algo_partial")
     backbone: str                      # "pe" for PE entries
     apply: Callable                    # (model, **kwargs) -> Any
     kwargs_from_args: Optional[Callable] = None
@@ -42,7 +42,7 @@ Eval and profile scripts only ever call two functions from this module:
     kwargs from `kwargs_from_args(args, ratio)`, calls `spec.apply(...)`.
   * `remove_all_pe(model)` — walks the model and reverts **any subclass**
     of `ResidualAttentionBlock` / `SelfAttention` back to its stock class,
-    then removes registered hooks and clears `model._tome_info`. You don't
+    then removes registered hooks and clears `model._algo_info`. You don't
     need to register your subclasses anywhere — `remove_all_pe` detects them
     structurally.
 
@@ -61,8 +61,8 @@ Same idea as SAM:
   2. Walk `transformer.resblocks`, and for each existing
      `SelfAttention` / `ResidualAttentionBlock` instance, **reassign
      `module.__class__`** to your subclass. Weights stay in place.
-  3. Stash patch state on `model._tome_info`. Every patched module reads
-     from `self._tome_info` (the apply function points it at the same dict).
+  3. Stash patch state on `model._algo_info`. Every patched module reads
+     from `self._algo_info` (the apply function points it at the same dict).
 
 Two structural patch flavors live alongside each other in the codebase:
 
@@ -92,21 +92,21 @@ attention and/or merge → MLP → unmerge. No shared base class — each algo
 defines its own `<Algo>PEPartialAttention(SelfAttention)` and
 `<Algo>PEPartialBlock(ResidualAttentionBlock)` outright. The `apply`
 function walks `transformer.resblocks` and reassigns `__class__`, mirroring
-SAM almost exactly. See [tome/pe_partial.py](../algos/tome/pe_partial.py)
+SAM almost exactly. See [algo/pe_partial.py](../algos/algo/pe_partial.py)
 for the canonical example.
 
 ---
 
-## 3. Walkthrough A — adding a stage-compress `mytome`
+## 3. Walkthrough A — adding a stage-compress `myalgo`
 
 ```python
-# algos/mytome/pe_compress.py
+# algos/myalgo/pe_compress.py
 from ..pe_base import (
     apply_stage_compress, FlashRopePEAttention, StageCompressPEBlock,
 )
 
 
-class MyTomePECompressBlock(StageCompressPEBlock):
+class MyalgoPECompressBlock(StageCompressPEBlock):
     def compress(self, x, active_idx, info):
         ratio: float = info["ratio"]
         has_cls: bool = info.get("use_cls_token", False)
@@ -120,21 +120,21 @@ class MyTomePECompressBlock(StageCompressPEBlock):
         return x_reduced, new_active_idx
 
 
-def apply_pe_mytome_patch(model, ratio=0.7, num_stages=4,
+def apply_pe_myalgo_patch(model, ratio=0.7, num_stages=4,
                           use_flash_rope=False, group_size=4,
                           compress_at_blocks=None, verbose=True):
-    info = {"algo": "mytome", "ratio": ratio, "num_stages": num_stages,
+    info = {"algo": "myalgo", "ratio": ratio, "num_stages": num_stages,
             "group_size": group_size,
             "use_flash_rope": bool(use_flash_rope)}
     return apply_stage_compress(
         model,
-        compress_block_class=MyTomePECompressBlock,
+        compress_block_class=MyalgoPECompressBlock,
         attn_class=FlashRopePEAttention,
         info=info,
         num_stages=num_stages,
         use_flash_rope=use_flash_rope,
         compress_at_blocks=compress_at_blocks,
-        verbose_tag="pe-mytome-stage" if verbose else "",
+        verbose_tag="pe-myalgo-stage" if verbose else "",
     )
 ```
 
@@ -148,11 +148,11 @@ present as a submodule.
 Then register in [`registry.py`](../algos/registry.py)'s `_register_pe()`:
 
 ```python
-from .mytome.pe_compress import apply_pe_mytome_patch
+from .myalgo.pe_compress import apply_pe_myalgo_patch
 register(AlgoSpec(
-    name="mytome",
+    name="myalgo",
     backbone="pe",
-    apply=apply_pe_mytome_patch,
+    apply=apply_pe_myalgo_patch,
     kwargs_from_args=_kw_pe_compress,
     category="compress",
     description="...",
@@ -165,22 +165,22 @@ a per-spec `remove` callback.
 
 ---
 
-## 4. Walkthrough B — adding a partial `mytome_partial`
+## 4. Walkthrough B — adding a partial `myalgo_partial`
 
 A partial patch defines its own attention + block subclasses (not built on
 `StageCompressPEBlock`):
 
 ```python
-# algos/mytome/pe_partial.py
+# algos/myalgo/pe_partial.py
 from ..pe_base import (
     SelfAttention, ResidualAttentionBlock,
     _find_vision_transformer, _vit_uses_cls_token,
 )
 
 
-class MyTomePEPartialAttention(SelfAttention):
+class MyAlgoPEPartialAttention(SelfAttention):
     def forward(self, x, attn_mask=None):
-        info = self._tome_info
+        info = self._algo_info
         ratio = info.get("ratio", 1.0)
         if ratio >= 1.0:
             return super().forward(x, attn_mask=attn_mask)
@@ -189,36 +189,36 @@ class MyTomePEPartialAttention(SelfAttention):
         ...
 
 
-class MyTomePEPartialBlock(ResidualAttentionBlock):
+class MyalgoPEPartialBlock(ResidualAttentionBlock):
     def forward(self, x, attn_mask=None):
-        info = self._tome_info
+        info = self._algo_info
         # Standard PE residual structure with optional merge/MLP/unmerge.
         x = x + self.drop_path1(self.ls_1(self._call_attn(self.ln_1(x), attn_mask=attn_mask)))
         ...
         return x
 
 
-def apply_pe_mytome_partial_patch(model, ratio=0.7, start_block=0,
+def apply_pe_myalgo_partial_patch(model, ratio=0.7, start_block=0,
                                   mlp_merge=True, verbose=True):
     transformer = _find_vision_transformer(model)
     n_blocks = len(transformer.resblocks)
     sb = max(0, min(int(start_block), n_blocks))
 
-    info = {"algo": "mytome_partial", "ratio": float(ratio),
+    info = {"algo": "myalgo_partial", "ratio": float(ratio),
             "use_cls_token": _vit_uses_cls_token(model),
             "start_block": sb, "mlp_merge": bool(mlp_merge)}
-    model._tome_info = info
+    model._algo_info = info
 
     for idx in range(sb, n_blocks):
         blk = transformer.resblocks[idx]
         attn = blk.attn
         if isinstance(attn, SelfAttention) and attn.rope is not None:
-            if not isinstance(attn, MyTomePEPartialAttention):
-                attn.__class__ = MyTomePEPartialAttention
-            attn._tome_info = info
-        if not isinstance(blk, MyTomePEPartialBlock):
-            blk.__class__ = MyTomePEPartialBlock
-        blk._tome_info = info
+            if not isinstance(attn, MyalgoPEPartialAttention):
+                attn.__class__ = MyalgoPEPartialAttention
+            attn._algo_info = info
+        if not isinstance(blk, MyalgoPEPartialBlock):
+            blk.__class__ = MyalgoPEPartialBlock
+        blk._algo_info = info
 
     return n_blocks - sb
 ```
@@ -228,17 +228,17 @@ rather than importing directly from `core.vision_encoder.pe` — that keeps
 the path-mutation in one place.
 
 Compare this to SAM's
-[tome/sam.py](../algos/tome/sam.py) — the shape is identical
+[algo/sam.py](../algos/algo/sam.py) — the shape is identical
 (define subclasses, walk modules, reassign `__class__`, stash state).
 
 Register:
 
 ```python
-from .mytome.pe_partial import apply_pe_mytome_partial_patch
+from .myalgo.pe_partial import apply_pe_myalgo_partial_patch
 register(AlgoSpec(
-    name="mytome_partial",
+    name="myalgo_partial",
     backbone="pe",
-    apply=apply_pe_mytome_partial_patch,
+    apply=apply_pe_myalgo_partial_patch,
     kwargs_from_args=_kw_pe_partial_basic,
     category="partial",
     description="...",
@@ -252,11 +252,11 @@ register(AlgoSpec(
 Both scripts pick the new name up automatically:
 
 ```bash
-python tasks/pe_imagenet/eval_pe_clip.py --algorithm mytome_partial \
+python tasks/pe_imagenet/eval_pe_clip.py --algorithm myalgo_partial \
     --ratio 0.7 0.5 --partial-start-block 5 --no-amp \
     --dataset imagenet1k --dataset-root ./data/imagenet
 
-python tasks/pe_imagenet/profile_pe.py --tome-algo mytome_partial --tome-ratio 0.5
+python tasks/pe_imagenet/profile_pe.py --algo-algo myalgo_partial --algo-ratio 0.5
 ```
 
 ---
@@ -309,7 +309,7 @@ model = pe.CLIP.from_config("PE-Core-S16-384", pretrained=False).eval()
 class A: ...
 args = A(); args.ratio = [0.5]; args.partial_start_block = 0; args.mlp_merge = True
 
-apply_pe(model, "mytome_partial", args=args, ratio=0.5)
+apply_pe(model, "myalgo_partial", args=args, ratio=0.5)
 x = torch.randn(2, 3, 384, 384)
 out = model.encode_image(x); print(out.shape)         # (2, output_dim)
 
@@ -318,7 +318,7 @@ out2 = model.encode_image(x); print(torch.allclose(out, out2))   # remove worked
 ```
 
 The `remove_all_pe` step should restore bit-identical numerics — if it
-doesn't, your `apply` is leaking state somewhere outside `_tome_info` /
+doesn't, your `apply` is leaking state somewhere outside `_algo_info` /
 class assignment.
 
 ---
@@ -330,7 +330,7 @@ python tasks/pe_imagenet/eval_pe_clip.py \
     --model PE-Core-L14-336 \
     --dataset imagenet1k --dataset-root ./data/imagenet \
     --dtype fp16 --batch-size 128 \
-    --algorithm none tome_partial mytome_partial gradtome_partial \
+    --algorithm none algo_partial myalgo_partial gradalgo_partial \
     --ratio 0.9 0.7 0.5 0.4 0.3 0.25
 
 python tasks/pe_imagenet/plot_pe_partial.py ./benchmark_results/pe_clip_*.csv \
