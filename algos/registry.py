@@ -215,6 +215,7 @@ def _kw_sam_basic(args, ratio):
         ratio=float(ratio if ratio is not None else args.ratios[0]),
         margin=float(getattr(args, "margin", 0.5)),
         mlp_merge=bool(getattr(args, "mlp_merge", True)),
+        piecewise_block_size=int(getattr(args, "piecewise_block_size", 64)),
     )
 
 
@@ -320,6 +321,9 @@ def _register_sam():
     def _from_sparge():
         from .sparge.sam import apply_patch as fn, SpargeSAMAttention as A
         return fn, None, A
+    def _from_piecewise():
+        from .piecewise.sam import apply_patch as fn, PiecewiseSAMAttention as A
+        return fn, None, A
 
     # (registered_name, importer, internal_algo, description)
     table = [
@@ -342,6 +346,9 @@ def _register_sam():
         ("sparge",           _from_sparge,           "sparge",
             "SpargeAttn top-k sparse attention. Drop-in SDPA swap; "
             "decomposed rel-pos bias preserved on Ampere."),
+        ("piecewise",        _from_piecewise,        "piecewise",
+            "Piecewise Sparse Attention (PISA) drop-in attention swap; "
+            "decomposed rel-pos bias is preserved."),
     ]
     for name, importer, internal_algo, desc in table:
         def mk(_imp=importer, _ia=internal_algo, _n=name, _d=desc):

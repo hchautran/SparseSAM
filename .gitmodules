@@ -10,3 +10,6 @@
 [submodule "SpargeAttn"]
 	path = algos/3rd_party/SpargeAttn
 	url = https://github.com/NguyenHuuChi/SpargeAttn
+[submodule "piecewise-sparse-attention"]
+	path = algos/3rd_party/piecewise-sparse-attention
+	url = https://github.com/NguyenHuuChi/piecewise-sparse-attention.git
