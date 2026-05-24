@@ -112,8 +112,6 @@ ckts/                           # SAM-HQ checkpoints
 data/                           # DIS5K, thin_object_detection, coco, imagenet, …
 ```
 
-Only **SAM** (SAM-HQ ViT) and **PE** (Perception Encoder) backbones are
-supported. MViT, SigLIP, SAM2, SAM3 support has been removed from this repo.
 
 All compression algorithms are runtime patches: they monkey-patch the encoder's
 transformer blocks at apply time and revert cleanly, so the original checkpoints
