@@ -252,7 +252,7 @@ Reports **Top-1 / Top-5 accuracy** plus the timing/memory triple.
 
 ## Results
 
-All numbers measured in this repo (not the paper) on **NVIDIA A100X-20C (sm80)** · PyTorch 2.5.1 + CUDA 12.1. Per-task tables, ablations, reproduce commands, and CSV pointers live next to each task entry point:
+All numbers measured  on **NVIDIA A100X-20C (sm80)** · PyTorch 2.5.1 + CUDA 12.1. Per-task tables, ablations, reproduce commands, and CSV pointers live next to each task entry point:
 
 | Task | What it measures | Headline | Full results |
 |---|---|---|---|
