@@ -1,37 +1,6 @@
 """
 Flash Attention v2 forward pass for SAM3 with **fused 2D axial RoPE**.
 
-This is a stripped-down fork of `flash_attn.py`:
-
-  REMOVED (compared with the SAM1 variant)
-    • m_rel_H / m_rel_W learnable bias inputs
-    • sRelH / sRelW shared-memory buffers
-    • rRelH / rRelW per-thread fragments
-    • the cooperative GMEM→SMEM rel_pos load
-    • the cooperative SMEM→RMEM rRelH/rRelW fill
-    • the `add_rel_pos_bias` method and the `inv_softmax_scale` factor
-    • m_perm_Q / m_perm_K (no token reordering)
-    • the constructor's `win_shape` argument
-
-  ADDED
-    • m_cos / m_sin GMEM tensors of shape (Sq, head_dim), shared across
-      batch and heads (RoPE depends only on token position).
-    • sCosQ / sSinQ shared-memory buffers of shape
-      (m_block_size, head_dim_padded), populated once per CTA.
-    • sCosK / sSinK shared-memory buffers of shape
-      (n_block_size, head_dim_padded), refreshed per K tile.
-    • Two cooperative GMEM→SMEM cp.async loads (one for Q's cos/sin, one
-      per K tile).
-    • Two in-SMEM rotation passes — `_rotate_smem_inplace` — that update
-      sQ and sK in place using the pairwise rotation
-        x[2i  ] ← x[2i  ]·cos_i − x[2i+1]·sin_i
-        x[2i+1] ← x[2i+1]·cos_i + x[2i  ]·sin_i
-
-The rest of the kernel (online softmax, P·V MMA, normalize, output store)
-is unchanged.
-
-Tensors: Q/K/V/O are (B, S, N, D) — same as flash_attn.py.
-cos/sin are (S, D) — broadcast over batch and heads.
 """
 
 from types import SimpleNamespace
