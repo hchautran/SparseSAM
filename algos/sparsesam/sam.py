@@ -123,6 +123,16 @@ def _wrap_perm(t: torch.Tensor) -> "cute.Tensor":
     return ct
 
 
+_CU_STREAM = None
+def _get_cu_stream():
+    """Wrap the current default CUDA stream once and reuse. SAM-HQ inference
+    runs on the default stream, so this is safe for our call paths."""
+    global _CU_STREAM
+    if _CU_STREAM is None:
+        _CU_STREAM = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
+    return _CU_STREAM
+
+
 def _fa2_can_implement(
     D: int, m_block: int, n_block: int, threads: int) -> bool:
     key = (D, m_block, n_block, threads)
@@ -347,28 +357,28 @@ class ToMeSAMAttention(Attention):
         perm_cache = self._tome_info.setdefault("perm_cache", {})
         cache_key = (win, ratio, n_block, perm_mode)
         if cache_key not in perm_cache:
-            perm_cache[cache_key] = tile_stride_matching(
+            p, ip, ipg = tile_stride_matching(
                 k, win, win, ratio=ratio, n_block=n_block, perm_mode=perm_mode,
             )
-        perm, inv_perm, _ = perm_cache[cache_key]
+            # Cache the int32 cast + cute wraps alongside — both are
+            # invariant across blocks that share this cache_key within
+            # a single forward (perm_cache resets per forward).
+            p_i32 = p.to(torch.int32)
+            perm_cache[cache_key] = (p, ip, ipg, p_i32, _wrap_perm(p_i32), _wrap_perm(p_i32))
+        perm, inv_perm, _, _, perm_q_c, perm_k_c = perm_cache[cache_key]
 
         perm_e = perm.unsqueeze(-1).expand(-1, -1, D)
         q_p = q.gather(1, perm_e)
         k_p = k.gather(1, perm_e)
         v_p = v.gather(1, perm_e)
 
-        perm_q_t = perm.to(torch.int32)
-        perm_k_t = perm.to(torch.int32)
-
-        cu_stream = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
+        cu_stream = _get_cu_stream()
         q_c = _wrap_qkvo(q_p.unsqueeze(2), _FA2_DTYPE_FP16)
         k_c = _wrap_qkvo(k_p.unsqueeze(2), _FA2_DTYPE_FP16)
         v_c = _wrap_qkvo(v_p.unsqueeze(2), _FA2_DTYPE_FP16)
         o_c = _wrap_qkvo(o.unsqueeze(2), _FA2_DTYPE_FP16)
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
-        perm_q_c = _wrap_perm(perm_q_t)
-        perm_k_c = _wrap_perm(perm_k_t)
 
         compiled, default_mask = _get_fa2_compiled(
             BH, 1, q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
@@ -422,7 +432,7 @@ class ToMeSAMBlock(Block):
             perm_mode = info.get("perm_mode", "z_interleave_sort")
             global_cached = info.get("perm_cache", {}).get((H_sp, ratio, _FA2_N_BLOCK_GLOBAL, perm_mode))
             if global_cached is not None:
-                g_perm, g_inv_perm, inv_perm_1d_group = global_cached
+                inv_perm_1d_group = global_cached[2]
                 nh = self.attn.num_heads
                 keep_n = max(1, round(ratio * x_seq.shape[1]))
                 # Avg head rank → topk avoids 2× full-N argsort+gather.
