@@ -2,15 +2,14 @@
 import sys
 import os
 import types
-from typing import Optional, Tuple
+from typing import Tuple
+
 import cutlass
 import cutlass.cute as cute
-import cutlass.torch as cutlass_torch
 import cuda.bindings.driver as cuda
 from cutlass.cute.runtime import from_dlpack
 import torch
 import torch.nn.functional as F
-import math
 
 _here = os.path.dirname(__file__)
 _sam_root = os.path.normpath(os.path.join(_here, '..', '3rd_party', 'sam-hq'))
@@ -26,10 +25,8 @@ from segment_anything.modeling.image_encoder import (
     window_partition,
     window_unpartition,
 )
-from .hilbert_utils import get_hilbert_inverse, get_hilbert_order
-from .z_utils import get_z_inverse, get_z_order
-from typing import Callable
-# from .merge import get_z_order, get_z_inverse
+from .hilbert_utils import get_hilbert_order
+from .z_utils import get_z_order
 
 
 def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor:
@@ -52,23 +49,6 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
     return rel_pos_resized[relative_coords.long()].half()
 
 
-def aggregate_over_head(x: torch.Tensor, num_heads: int, option: str = "mean") -> torch.Tensor:
-
-    B, N, _ = x.shape
-    metric = x.view(B, N, num_heads, -1)
-
-    if option == "max":
-        metric = metric.max(dim=2).values
-    elif option == "mean":
-        metric = metric.mean(dim=2)
-    elif option == "sum":
-        metric = metric.sum(dim=2)
-    else:
-        raise ValueError(f"Unknown aggregation option: {option}")
-
-    return metric
-
-
 _FA2_M_BLOCK_LOCAL = 64
 _FA2_N_BLOCK_LOCAL = 64
 _FA2_M_BLOCK_GLOBAL = 64
@@ -76,17 +56,9 @@ _FA2_N_BLOCK_GLOBAL = 64
 _FA2_THREADS_LOCAL = 128
 _FA2_THREADS_GLOBAL = 128
 
-# A-mask = banded diagonal (width _DIAG_BAND_WIDTH) + vertical "keep" bar
-# (first floor(ratio * num_n_blocks * _KEEP_BAR_SCALE) columns).
-_DIAG_BAND_WIDTH = 1
-_KEEP_BAR_SCALE  = 1.0
-
 _FA2_DTYPE_FP16 = cutlass.dtype("Float16")
-_SPARSE_MASK_DTYPE = cutlass.dtype("Int32")
 _FA2_COMPILED: dict = {}
 _FA2_CAN_IMPL: dict = {}
-_HILBERT_CACHE: dict = {}
-_SPARSE_MASK_CACHE: dict = {}
 
 
 def compute_rel_bias(
@@ -141,76 +113,6 @@ def _fa2_can_implement(
             _FA2_DTYPE_FP16, D, m_block, n_block, threads
         )
     return _FA2_CAN_IMPL[key]
-
-
-def make_A_mask(B, H, T, ratio, m_block, n_block,
-                band_width: int = _DIAG_BAND_WIDTH,
-                keep_bar_scale: float = _KEEP_BAR_SCALE,
-                device="cuda"):
-    num_m_blocks = math.ceil(T / m_block)
-    num_n_blocks = math.ceil(T / n_block)
-
-    t = torch.zeros(B, H, num_m_blocks, num_n_blocks, dtype=torch.int32, device=device)
-
-    # Banded diagonal of width `band_width` (centered on the identity).
-    half = band_width // 2
-    for k in range(-half, band_width - half):
-        if k == 0:
-            i_m = torch.arange(min(num_m_blocks, num_n_blocks), device=device)
-            t[:, :, i_m, i_m] = 1
-        else:
-            i_m = torch.arange(max(0, -k), min(num_m_blocks, num_n_blocks - k), device=device)
-            t[:, :, i_m, i_m + k] = 1
-
-    # Reduced vertical "keep" bar.
-    n_keep_cols = int(ratio * num_n_blocks * keep_bar_scale)
-    if n_keep_cols > 0:
-        t[:, :, :, :(n_keep_cols - band_width +1 ) ] = 1
-
-    ct = from_dlpack(t, assumed_align=4)
-    return ct, t
-
-def _get_fa2_compiled(
-    B, H ,q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-    win, scale, cu_stream,
-    D: int, m_block: int, n_block: int, threads: int,
-    ratio:float,
-    is_global: bool = False,
-):
-    key = (win, D, m_block, n_block, threads, ratio)
-    band_width = _DIAG_BAND_WIDTH if is_global else 0
-    # ratio = 1.0 if not is_global else ratio
-    mask_key = (B, H, win, ratio, m_block, n_block, band_width, _KEEP_BAR_SCALE)
-    if mask_key not in _SPARSE_MASK_CACHE:
-        ct, t = make_A_mask(B, H, win**2, ratio, m_block, n_block, band_width=band_width)
-        _SPARSE_MASK_CACHE[mask_key] = (ct, t)
-        
-    ct_mask, t_mask = _SPARSE_MASK_CACHE[mask_key]
-
-    if key not in _FA2_COMPILED:
-        _FA2_COMPILED[key] = cute.compile(
-            FlashAttentionForwardAmpere(D, m_block, n_block, threads, win),
-            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c, ct_mask, scale, cu_stream,
-        )
-    return _FA2_COMPILED[key], ct_mask
-
-
-def _get_fa2_compiled_structured(
-    q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-    n_init_blocks, scale, cu_stream,
-    D: int, m_block: int, n_block: int, threads: int, win: int,
-):
-    """Compile + cache the structured (A-shape, no mask tensor) FA2 launcher
-    for global blocks. n_init_blocks is the keep-bar width — drops the (B,H,nm,nn)
-    mask tensor and only iterates active n-blocks (paper §4.1 Stripe-Sort)."""
-    key = ("structured", win, D, m_block, n_block, threads)
-    if key not in _FA2_COMPILED:
-        _FA2_COMPILED[key] = cute.compile(
-            FlashAttentionForwardAmpere(D, m_block, n_block, threads, win).call_structured,
-            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-            n_init_blocks, scale, cu_stream,
-        )
-    return _FA2_COMPILED[key]
 
 
 def _get_fa2_compiled_a_shape(
@@ -308,66 +210,6 @@ def tile_stride_matching(
     return perm_1d, inv_perm_1d, inv_perm_1d_group
 
 
-_STRIDE_PERM_CACHE: dict = {}
-
-
-def tile_stride_matching_uniform(
-    x: torch.Tensor, H: int, W: int,
-    ratio: float = 0.0,
-    group_size: int = 4,
-    n_block: int = 64,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Stride-uniform variant: keep-set groups picked at uniform stride over
-    the Z-order, so the global keep prefix has even spatial coverage."""
-    B, N, _ = x.shape
-    device  = x.device
-    assert N == H * W and N % group_size == 0
-
-    n_groups = N // group_size
-    gs       = group_size
-    num_n_blocks   = math.ceil(N / n_block)
-    n_dense_blocks = int(ratio * num_n_blocks)
-    n_keep_tokens  = min(n_dense_blocks * n_block, (N // gs) * gs)
-    n_keep  = n_keep_tokens // gs
-    n_merge = n_groups - n_keep
-
-    cache_key = (H, W, ratio, group_size, n_block, str(device))
-    cached = _STRIDE_PERM_CACHE.get(cache_key)
-    if cached is None:
-        z_perm = get_z_order(H, W, device=device)
-        group_raster = z_perm.view(n_groups, gs)                       # (n_groups, gs)
-
-        if n_keep > 0 and n_keep < n_groups:
-            keep_idx = torch.round(
-                torch.arange(n_keep, device=device, dtype=torch.float32)
-                * (n_groups / n_keep)
-            ).long().clamp_(0, n_groups - 1)
-            mask = torch.ones(n_groups, dtype=torch.bool, device=device)
-            mask[keep_idx] = False
-            merge_idx = torch.nonzero(mask, as_tuple=False).squeeze(1)
-        elif n_keep == 0:
-            keep_idx  = torch.empty(0, dtype=torch.long, device=device)
-            merge_idx = torch.arange(n_groups, device=device)
-        else:
-            keep_idx  = torch.arange(n_groups, device=device)
-            merge_idx = torch.empty(0, dtype=torch.long, device=device)
-
-        keep_raster = group_raster[keep_idx].reshape(n_keep * gs)
-        if n_merge > 0:
-            merge_raster = group_raster[merge_idx].permute(1, 0).reshape(n_merge * gs)
-            perm_1d_1 = torch.cat([keep_raster, merge_raster], dim=0)
-        else:
-            perm_1d_1 = keep_raster
-
-        inv_1 = torch.argsort(perm_1d_1, dim=0)
-        _STRIDE_PERM_CACHE[cache_key] = (perm_1d_1, inv_1)
-        cached = _STRIDE_PERM_CACHE[cache_key]
-
-    perm_1d_1, inv_1 = cached
-    perm_1d     = perm_1d_1.unsqueeze(0).expand(B, -1).contiguous()
-    inv_perm_1d = inv_1.unsqueeze(0).expand(B, -1).contiguous()
-    return perm_1d, inv_perm_1d
-
 
 class ToMeSAMAttention(Attention):
 
@@ -375,7 +217,6 @@ class ToMeSAMAttention(Attention):
                 m_block: int = _FA2_M_BLOCK_LOCAL,
                 n_block: int = _FA2_N_BLOCK_LOCAL,
                 threads: int = _FA2_THREADS_LOCAL,
-                custom_mask: "cute.Tensor | None" = None,
                 is_global: bool = False,
                 return_perm: bool = False) -> torch.Tensor:
         B, H, W, _ = x.shape
@@ -422,38 +263,21 @@ class ToMeSAMAttention(Attention):
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
 
-        if custom_mask is None:
-            # Both global and win14 blocks have a static block-sparsity pattern.
-            # call_a_shape bit-exactly matches the masked kernel's iteration but
-            # uses inline (n_block < n_init_blocks) predicates, dropping the
-            # (B,H,nm,nn) mask tensor.
-            #   global → A-shape (band=1 + keep-bar) → with_diagonal=True
-            #   win14  → keep-bar only (band=0)      → with_diagonal=False
-            # make_A_mask sets first (n_keep_cols - band_width + 1) cols to 1,
-            # so the matching n_init_blocks for the inline predicate is:
-            #   global: int(ratio*num_n_blocks) (band=1 cancels the +1)
-            #   win14:  int(ratio*num_n_blocks) + 1
-            num_n_blocks = (Sq + n_block - 1) // n_block
-            n_keep_cols = int(ratio * num_n_blocks)
-            band_width = _DIAG_BAND_WIDTH if is_global else 0
-            n_init_blocks = n_keep_cols - band_width + 1
-            compiled = _get_fa2_compiled_a_shape(
-                q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-                n_init_blocks, self.scale, cu_stream,
-                D, m_block, n_block, threads, win,
-                with_diagonal=is_global,
-            )
-            compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-                     n_init_blocks, self.scale, cu_stream)
-        else:
-            compiled, default_mask = _get_fa2_compiled(
-                BH, 1, q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-                win, self.scale, cu_stream, D, m_block, n_block, threads,
-                ratio=ratio,
-                is_global=is_global,
-            )
-            mask = custom_mask if custom_mask is not None else default_mask
-            compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c, mask, self.scale, cu_stream)
+        # Static block-sparsity pattern (paper §4.1 Stripe-Sort):
+        #   global: A-shape (band=1 + keep-bar of floor(ratio·num_n_blocks) cols) → with_diagonal=True
+        #   win14:  keep-bar only of floor(ratio·num_n_blocks)+1 cols              → with_diagonal=False
+        # The +1 for win14 mirrors the historical mask construction (`n_keep_cols - band_width + 1`).
+        num_n_blocks = (Sq + n_block - 1) // n_block
+        n_keep_cols = int(ratio * num_n_blocks)
+        n_init_blocks = n_keep_cols if is_global else n_keep_cols + 1
+        compiled = _get_fa2_compiled_a_shape(
+            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            n_init_blocks, self.scale, cu_stream,
+            D, m_block, n_block, threads, win,
+            with_diagonal=is_global,
+        )
+        compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                 n_init_blocks, self.scale, cu_stream)
         inv_perm_e = inv_perm.unsqueeze(-1).expand(-1, -1, D)
         o_out = o.gather(1, inv_perm_e).reshape(B, self.num_heads, Sq, D).permute(0, 2, 1, 3).reshape(B, Sq, -1)
         out = self.proj(o_out).reshape(B, H, W, -1)
@@ -477,7 +301,7 @@ class ToMeSAMBlock(Block):
             H_w, W_w = x_n.shape[1], x_n.shape[2]
             x_n_win, pad_hw = window_partition(x_n, ws)
             x_attn, perm, inv_perm = self.attn(
-                x_n_win, ratio, use_fa2=True, custom_mask=None, return_perm=True,
+                x_n_win, ratio, use_fa2=True, return_perm=True,
             )
             x_attn = window_unpartition(x_attn, ws, pad_hw, (H_w, W_w))
         else:
