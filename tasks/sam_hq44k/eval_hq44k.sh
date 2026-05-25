@@ -24,8 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-ALGOS=${ALGOS:-"sparsesam gradtome tome"}
-RATIOS=${RATIOS:-"0.75 0.5 0.25"}
+ALGOS=${ALGOS:-"none sparsesam gradtome tome"}
+RATIOS=${RATIOS:-"0.7 0.4 0.3 0.25"}
 BATCH_SIZES=${BATCH_SIZES:-"8"}
 NUM_SAMPLES=${NUM_SAMPLES:-470}
 CKPT=${CKPT:-./ckts/sam_hq_vit_l.pth}
