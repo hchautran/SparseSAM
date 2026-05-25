@@ -110,7 +110,8 @@ def tile_stride_matching(
     perm_mode: str = "z_interleave_sort",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Order tokens for sparsesam attention; return (perm, inv_perm, inv_perm_group).
-    `perm_mode` is `<space>_<layout>_<ranking>`: space ∈ {z, hilbert}, layout ∈ {interleave, naive}, ranking ∈ {sort, nosort}."""
+    `perm_mode` is `<space>_<layout>_<ranking>` — space ∈ {z, hilbert},
+    layout ∈ {interleave, naive}, ranking ∈ {sort, nosort}."""
     N = H * W
     assert N % group_size == 0, f"N={N} must be divisible by group_size={group_size}"
 
@@ -196,7 +197,8 @@ class ToMeSAMAttention(Attention):
             p, ip, ipg = tile_stride_matching(
                 k, win, win, ratio=ratio, n_block=n_block, perm_mode=perm_mode,
             )
-            # Cache int32 perm + cute wraps too — invariant across blocks sharing this key within a forward.
+            # Cache int32 perm + cute wraps too — invariant across blocks
+            # sharing this key within a forward.
             p_i32 = p.to(torch.int32)
             perm_cache[cache_key] = (p, ip, ipg, p_i32, _wrap_perm(p_i32), _wrap_perm(p_i32))
         perm, inv_perm, _, _, perm_q_c, perm_k_c = perm_cache[cache_key]
@@ -214,7 +216,8 @@ class ToMeSAMAttention(Attention):
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
 
-        # A-shape sparsity (paper §4.1): global gets band+keep-bar (with_diagonal=True), win14 gets keep-bar only (+1 col mirrors the historical mask formula).
+        # A-shape sparsity (paper §4.1): global gets band+keep-bar (with_diagonal=True);
+        # win14 gets keep-bar only (+1 col mirrors the historical mask formula).
         num_n_blocks = (Sq + n_block - 1) // n_block
         n_keep_cols = int(ratio * num_n_blocks)
         n_init_blocks = n_keep_cols if is_global else n_keep_cols + 1
@@ -288,7 +291,8 @@ class ToMeSAMBlock(Block):
 
 
 def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
-    """Pre-compile the FA2 a_shape kernel for every distinct config in the encoder, and prime each block's attn._Rh/_Rw cache."""
+    """Pre-compile the FA2 a_shape kernel for every distinct config in the encoder,
+    and prime each block's attn._Rh / attn._Rw cache."""
     device = next(encoder.parameters()).device
     seen: set = set()
 
@@ -351,7 +355,8 @@ def apply_patch(
     **_,
 ) -> ImageEncoderViT:
     """SparseSAM patch for the image encoder.
-    `mlp_merge=True` runs the per-block MLP only on the top floor(ratio*N) keep tokens; `perm_mode` selects the `tile_stride_matching` ranking strategy."""
+    `mlp_merge=True` runs the per-block MLP only on the top floor(ratio*N) keep tokens;
+    `perm_mode` selects the `tile_stride_matching` ranking strategy."""
     assert 0 < ratio <= 1.0, "ratio must be in (0, 1]"
 
     tome_info = {
