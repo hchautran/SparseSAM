@@ -195,6 +195,24 @@ def _get_fa2_compiled(
     return _FA2_COMPILED[key], ct_mask
 
 
+def _get_fa2_compiled_structured(
+    q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+    n_init_blocks, scale, cu_stream,
+    D: int, m_block: int, n_block: int, threads: int, win: int,
+):
+    """Compile + cache the structured (A-shape, no mask tensor) FA2 launcher
+    for global blocks. n_init_blocks is the keep-bar width — drops the (B,H,nm,nn)
+    mask tensor and only iterates active n-blocks (paper §4.1 Stripe-Sort)."""
+    key = ("structured", win, D, m_block, n_block, threads)
+    if key not in _FA2_COMPILED:
+        _FA2_COMPILED[key] = cute.compile(
+            FlashAttentionForwardAmpere(D, m_block, n_block, threads, win).call_structured,
+            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            n_init_blocks, scale, cu_stream,
+        )
+    return _FA2_COMPILED[key]
+
+
 def tile_stride_matching(
     x: torch.Tensor, H: int, W: int,
     ratio: float = 0.0,
@@ -380,14 +398,29 @@ class ToMeSAMAttention(Attention):
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
 
-        compiled, default_mask = _get_fa2_compiled(
-            BH, 1, q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-            win, self.scale, cu_stream, D, m_block, n_block, threads,
-            ratio=ratio,
-            is_global=is_global,
-        )
-        mask = custom_mask if custom_mask is not None else default_mask
-        compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c, mask, self.scale, cu_stream)
+        if is_global and custom_mask is None:
+            # Global blocks have A-shape (band=1 + keep-bar=ratio*num_n_blocks).
+            # call_structured hard-codes this so the (B,H,nm,nn) mask tensor is
+            # dropped and we only iterate active n-blocks (paper §4.1 Stripe-Sort
+            # static block-sparsity).
+            num_n_blocks = (Sq + n_block - 1) // n_block
+            n_init_blocks = int(ratio * num_n_blocks)
+            compiled = _get_fa2_compiled_structured(
+                q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                n_init_blocks, self.scale, cu_stream,
+                D, m_block, n_block, threads, win,
+            )
+            compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                     n_init_blocks, self.scale, cu_stream)
+        else:
+            compiled, default_mask = _get_fa2_compiled(
+                BH, 1, q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                win, self.scale, cu_stream, D, m_block, n_block, threads,
+                ratio=ratio,
+                is_global=is_global,
+            )
+            mask = custom_mask if custom_mask is not None else default_mask
+            compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c, mask, self.scale, cu_stream)
         inv_perm_e = inv_perm.unsqueeze(-1).expand(-1, -1, D)
         o_out = o.gather(1, inv_perm_e).reshape(B, self.num_heads, Sq, D).permute(0, 2, 1, 3).reshape(B, Sq, -1)
         out = self.proj(o_out).reshape(B, H, W, -1)
@@ -506,12 +539,12 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             f"win={win}  D={D}  m={m_block}  n={n_block}  T={threads}   ...",
             end=" ", flush=True,
         )
-        _get_fa2_compiled(
-            B, H, q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-            win, attn.scale, cu_stream,
-            D, m_block, n_block, threads,
-            ratio=0.5,
-            is_global=True,
+        num_n_blocks = (Sq + n_block - 1) // n_block
+        n_init_blocks_warm = int(0.5 * num_n_blocks)
+        _get_fa2_compiled_structured(
+            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            n_init_blocks_warm, attn.scale, cu_stream,
+            D, m_block, n_block, threads, win,
         )
         print("done")
 
