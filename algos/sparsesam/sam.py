@@ -429,8 +429,14 @@ class ToMeSAMAttention(Attention):
             # (B,H,nm,nn) mask tensor.
             #   global → A-shape (band=1 + keep-bar) → with_diagonal=True
             #   win14  → keep-bar only (band=0)      → with_diagonal=False
+            # make_A_mask sets first (n_keep_cols - band_width + 1) cols to 1,
+            # so the matching n_init_blocks for the inline predicate is:
+            #   global: int(ratio*num_n_blocks) (band=1 cancels the +1)
+            #   win14:  int(ratio*num_n_blocks) + 1
             num_n_blocks = (Sq + n_block - 1) // n_block
-            n_init_blocks = int(ratio * num_n_blocks)
+            n_keep_cols = int(ratio * num_n_blocks)
+            band_width = _DIAG_BAND_WIDTH if is_global else 0
+            n_init_blocks = n_keep_cols - band_width + 1
             compiled = _get_fa2_compiled_a_shape(
                 q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
                 n_init_blocks, self.scale, cu_stream,
