@@ -17,7 +17,7 @@ _sam_root = os.path.normpath(os.path.join(_here, '..', '3rd_party', 'sam-hq'))
 if _sam_root not in sys.path:
     sys.path.insert(0, _sam_root)
 
-from ..kernels.flash_attn_rel_pos import FlashAttentionForwardAmpere
+from ..kernels.flash_attn import FlashAttentionForwardAmpere
 
 from segment_anything.modeling.image_encoder import (
     ImageEncoderViT,

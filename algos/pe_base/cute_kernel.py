@@ -36,7 +36,7 @@ def _ensure_cute_deps():
         import cutlass as _cutlass
         from cutlass.cute.runtime import from_dlpack as _from_dlpack
         import cuda.bindings.driver as _cuda_driver
-        from ..kernels.flash_attn_rope_fused import FlashAttentionForwardAmpereRoPE as _Kernel
+        from ..kernels.flash_attn import FlashAttentionForwardAmpereRoPE as _Kernel
     except Exception as e:
         _KERNEL_IMPORT_ERROR = e
         return
