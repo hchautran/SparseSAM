@@ -304,14 +304,15 @@ class ToMeSAMBlock(Block):
 
 
 def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
-
+    """Pre-compile the FA2 a_shape kernel for every (win, m, n, threads) config
+    seen in the encoder so block 0's first forward doesn't pay the JIT cost.
+    Also primes attn._Rh / attn._Rw caches for each block."""
     device = next(encoder.parameters()).device
     seen: set = set()
 
     for blk in encoder.blocks:
         attn      = blk.attn
         is_global = (blk.window_size == 0)
-
         win = (attn.rel_pos_h.shape[0] + 1) // 2
         D   = attn.rel_pos_h.shape[1]
 
@@ -319,15 +320,11 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             attn._Rh = get_rel_pos(win, win, attn.rel_pos_h)
             attn._Rw = get_rel_pos(win, win, attn.rel_pos_w)
 
-        if is_global:
-            m_block = _FA2_M_BLOCK_GLOBAL
-            n_block = _FA2_N_BLOCK_GLOBAL
-            threads = _FA2_THREADS_GLOBAL
-        else:
-            m_block = _FA2_M_BLOCK_LOCAL
-            n_block = _FA2_N_BLOCK_LOCAL
-            threads = _FA2_THREADS_LOCAL
-
+        m_block, n_block, threads = (
+            (_FA2_M_BLOCK_GLOBAL, _FA2_N_BLOCK_GLOBAL, _FA2_THREADS_GLOBAL)
+            if is_global else
+            (_FA2_M_BLOCK_LOCAL, _FA2_N_BLOCK_LOCAL, _FA2_THREADS_LOCAL)
+        )
         compile_key = (win, D, m_block, n_block, threads, is_global)
         if compile_key in seen or not FlashAttentionForwardAmpere.cached_can_implement(
             _FA2_DTYPE_FP16, D, m_block, n_block, threads, win,
@@ -336,27 +333,13 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             continue
         seen.add(compile_key)
 
-        Sq = win * win
-        H  = attn.num_heads
-        B  = 1
-
-        q = torch.zeros(B, Sq, H, D, dtype=torch.float16, device=device)
-        k = torch.zeros_like(q)
-        v = torch.zeros_like(q)
-        o = torch.zeros_like(q)
-        rel_h = torch.zeros(B, Sq, H, win, dtype=torch.float16, device=device)
-        rel_w = torch.zeros_like(rel_h)
-
+        # Build dummy inputs (zero tensors) so cute.compile can bake in layouts.
+        Sq, H = win * win, attn.num_heads
+        zero = lambda *shape: torch.zeros(*shape, dtype=torch.float16, device=device)
+        q, k, v, o = zero(1, Sq, H, D), zero(1, Sq, H, D), zero(1, Sq, H, D), zero(1, Sq, H, D)
+        rel_h, rel_w = zero(1, Sq, H, win), zero(1, Sq, H, win)
+        identity = torch.arange(Sq, device=device, dtype=torch.int32).unsqueeze(0)
         cu_stream = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
-        q_c = _wrap_qkvo(q, _FA2_DTYPE_FP16)
-        k_c = _wrap_qkvo(k, _FA2_DTYPE_FP16)
-        v_c = _wrap_qkvo(v, _FA2_DTYPE_FP16)
-        o_c = _wrap_qkvo(o, _FA2_DTYPE_FP16)
-        rh_c = _wrap_bias(rel_h)
-        rw_c = _wrap_bias(rel_w)
-        identity = torch.arange(Sq, device=q.device, dtype=torch.int32).unsqueeze(0)  # (1, Sq)
-        perm_q_c = _wrap_perm(identity)
-        perm_k_c = _wrap_perm(identity)
 
         label = "global" if is_global else f"win{win}"
         print(
@@ -364,11 +347,13 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             f"win={win}  D={D}  m={m_block}  n={n_block}  T={threads}   ...",
             end=" ", flush=True,
         )
-        num_n_blocks = (Sq + n_block - 1) // n_block
-        n_init_blocks_warm = int(0.5 * num_n_blocks)
+        n_init_blocks_warm = int(0.5 * ((Sq + n_block - 1) // n_block))
         FlashAttentionForwardAmpere.get_compiled_a_shape(
             D, m_block, n_block, threads, win, is_global,
-            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            _wrap_qkvo(q, _FA2_DTYPE_FP16), _wrap_qkvo(k, _FA2_DTYPE_FP16),
+            _wrap_qkvo(v, _FA2_DTYPE_FP16), _wrap_qkvo(o, _FA2_DTYPE_FP16),
+            _wrap_bias(rel_h), _wrap_bias(rel_w),
+            _wrap_perm(identity), _wrap_perm(identity),
             n_init_blocks_warm, attn.scale, cu_stream,
         )
         print("done")
