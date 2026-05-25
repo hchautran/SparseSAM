@@ -213,6 +213,30 @@ def _get_fa2_compiled_structured(
     return _FA2_COMPILED[key]
 
 
+def _get_fa2_compiled_a_shape(
+    q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+    n_init_blocks, scale, cu_stream,
+    D: int, m_block: int, n_block: int, threads: int, win: int,
+    with_diagonal: bool = True,
+):
+    """Compile + cache the A-shape inline-mask FA2 launcher. Bit-exactly matches
+    `kernel`'s iteration order (right-to-left over all n_blocks, same is_first /
+    in_mask flags, same K-prefetch chain), but replaces the mask GMEM reads with
+    inline `(n_block < n_init_blocks)` predicates. Drops the (B,H,nm,nn) mask
+    tensor entirely.
+      with_diagonal=True  → A-shape (band=1 + keep-bar), for global blocks.
+      with_diagonal=False → keep-bar only (no diagonal), for win14 blocks."""
+    key = ("a_shape", win, D, m_block, n_block, threads, with_diagonal)
+    if key not in _FA2_COMPILED:
+        _FA2_COMPILED[key] = cute.compile(
+            FlashAttentionForwardAmpere(D, m_block, n_block, threads, win).call_a_shape,
+            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            n_init_blocks, scale, cu_stream,
+            with_diagonal,
+        )
+    return _FA2_COMPILED[key]
+
+
 def tile_stride_matching(
     x: torch.Tensor, H: int, W: int,
     ratio: float = 0.0,
@@ -398,17 +422,20 @@ class ToMeSAMAttention(Attention):
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
 
-        if is_global and custom_mask is None:
-            # Global blocks have A-shape (band=1 + keep-bar=ratio*num_n_blocks).
-            # call_structured hard-codes this so the (B,H,nm,nn) mask tensor is
-            # dropped and we only iterate active n-blocks (paper §4.1 Stripe-Sort
-            # static block-sparsity).
+        if custom_mask is None:
+            # Both global and win14 blocks have a static block-sparsity pattern.
+            # call_a_shape bit-exactly matches the masked kernel's iteration but
+            # uses inline (n_block < n_init_blocks) predicates, dropping the
+            # (B,H,nm,nn) mask tensor.
+            #   global → A-shape (band=1 + keep-bar) → with_diagonal=True
+            #   win14  → keep-bar only (band=0)      → with_diagonal=False
             num_n_blocks = (Sq + n_block - 1) // n_block
             n_init_blocks = int(ratio * num_n_blocks)
-            compiled = _get_fa2_compiled_structured(
+            compiled = _get_fa2_compiled_a_shape(
                 q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
                 n_init_blocks, self.scale, cu_stream,
                 D, m_block, n_block, threads, win,
+                with_diagonal=is_global,
             )
             compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
                      n_init_blocks, self.scale, cu_stream)
@@ -499,14 +526,16 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             attn._Rh = get_rel_pos(win, win, attn.rel_pos_h)
             attn._Rw = get_rel_pos(win, win, attn.rel_pos_w)
 
-        if not is_global:
-            continue
+        if is_global:
+            m_block = _FA2_M_BLOCK_GLOBAL
+            n_block = _FA2_N_BLOCK_GLOBAL
+            threads = _FA2_THREADS_GLOBAL
+        else:
+            m_block = _FA2_M_BLOCK_LOCAL
+            n_block = _FA2_N_BLOCK_LOCAL
+            threads = _FA2_THREADS_LOCAL
 
-        m_block = _FA2_M_BLOCK_GLOBAL
-        n_block = _FA2_N_BLOCK_GLOBAL
-        threads = _FA2_THREADS_GLOBAL
-
-        compile_key = (win, D, m_block, n_block, threads)
+        compile_key = (win, D, m_block, n_block, threads, is_global)
         if compile_key in seen or not _fa2_can_implement(D, m_block, n_block, threads):
             seen.add(compile_key)
             continue
@@ -534,17 +563,19 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
         perm_q_c = _wrap_perm(identity)
         perm_k_c = _wrap_perm(identity)
 
+        label = "global" if is_global else f"win{win}"
         print(
-            f"[ToMe-SAM] compiling FA2 kernel  global  "
+            f"[ToMe-SAM] compiling FA2 kernel  {label}  "
             f"win={win}  D={D}  m={m_block}  n={n_block}  T={threads}   ...",
             end=" ", flush=True,
         )
         num_n_blocks = (Sq + n_block - 1) // n_block
         n_init_blocks_warm = int(0.5 * num_n_blocks)
-        _get_fa2_compiled_structured(
+        _get_fa2_compiled_a_shape(
             q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
             n_init_blocks_warm, attn.scale, cu_stream,
             D, m_block, n_block, threads, win,
+            with_diagonal=is_global,
         )
         print("done")
 
