@@ -543,7 +543,21 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
     (B,H,nm,nn) mask GMEM tensor. Bit-exactly matches the iteration order of an
     equivalent masked kernel; the historical masked / structured variants were
     removed in May 2026 because the SparseSAM patch only used the A-shape pattern.
+
+    The class also owns the compile cache so callers don't need to manage one:
+        compiled = FlashAttentionForwardAmpereRelPos.get_compiled_a_shape(
+            D, m_block, n_block, threads, win, with_diagonal,
+            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+            n_init_blocks, scale, cu_stream,
+        )
+        compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                 n_init_blocks, scale, cu_stream)
     """
+
+    # Per-class caches (keyed by config tuple). cute-compiled kernels and
+    # can_implement results are both per-config-deterministic.
+    _COMPILED: dict = {}
+    _CAN_IMPL: dict = {}
 
     def __init__(
         self,
@@ -572,6 +586,43 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
         if (m_block_size * 2) % num_threads != 0:
             return False
         return True
+
+    @classmethod
+    def cached_can_implement(cls, dtype, head_dim, m_block_size, n_block_size,
+                              num_threads, win_shape=0) -> bool:
+        """Memoized `can_implement`. Same result, no repeat SMEM math."""
+        key = (dtype, head_dim, m_block_size, n_block_size, num_threads, win_shape)
+        if key not in cls._CAN_IMPL:
+            cls._CAN_IMPL[key] = cls.can_implement(
+                dtype, head_dim, m_block_size, n_block_size, num_threads, win_shape,
+            )
+        return cls._CAN_IMPL[key]
+
+    @classmethod
+    def get_compiled_a_shape(
+        cls,
+        # config (key)
+        D: int, m_block: int, n_block: int, threads: int, win: int,
+        with_diagonal: bool,
+        # cute compile args (used only on cache miss to bake in layouts)
+        q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+        n_init_blocks, scale, cu_stream,
+    ):
+        """Compile + cache `call_a_shape` for the given config. Repeated calls
+        with the same (D, m_block, n_block, threads, win, with_diagonal) tuple
+        return the same compiled kernel (the tensor args are only consulted on
+        the first call to bake in shapes/dtypes/layouts via cute.compile)."""
+        key = (D, m_block, n_block, threads, win, with_diagonal)
+        compiled = cls._COMPILED.get(key)
+        if compiled is None:
+            compiled = cute.compile(
+                cls(D, m_block, n_block, threads, win).call_a_shape,
+                q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
+                n_init_blocks, scale, cu_stream,
+                with_diagonal,
+            )
+            cls._COMPILED[key] = compiled
+        return compiled
 
     # ─────────────────────────────────────────────────────────────────────
     # A-shape inline-mask variant: bit-exact match with `kernel` for the

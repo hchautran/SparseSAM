@@ -57,8 +57,6 @@ _FA2_THREADS_LOCAL = 128
 _FA2_THREADS_GLOBAL = 128
 
 _FA2_DTYPE_FP16 = cutlass.dtype("Float16")
-_FA2_COMPILED: dict = {}
-_FA2_CAN_IMPL: dict = {}
 
 
 def compute_rel_bias(
@@ -103,40 +101,6 @@ def _get_cu_stream():
     if _CU_STREAM is None:
         _CU_STREAM = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
     return _CU_STREAM
-
-
-def _fa2_can_implement(
-    D: int, m_block: int, n_block: int, threads: int) -> bool:
-    key = (D, m_block, n_block, threads)
-    if key not in _FA2_CAN_IMPL:
-        _FA2_CAN_IMPL[key] = FlashAttentionForwardAmpere.can_implement(
-            _FA2_DTYPE_FP16, D, m_block, n_block, threads
-        )
-    return _FA2_CAN_IMPL[key]
-
-
-def _get_fa2_compiled_a_shape(
-    q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-    n_init_blocks, scale, cu_stream,
-    D: int, m_block: int, n_block: int, threads: int, win: int,
-    with_diagonal: bool = True,
-):
-    """Compile + cache the A-shape inline-mask FA2 launcher. Bit-exactly matches
-    `kernel`'s iteration order (right-to-left over all n_blocks, same is_first /
-    in_mask flags, same K-prefetch chain), but replaces the mask GMEM reads with
-    inline `(n_block < n_init_blocks)` predicates. Drops the (B,H,nm,nn) mask
-    tensor entirely.
-      with_diagonal=True  → A-shape (band=1 + keep-bar), for global blocks.
-      with_diagonal=False → keep-bar only (no diagonal), for win14 blocks."""
-    key = ("a_shape", win, D, m_block, n_block, threads, with_diagonal)
-    if key not in _FA2_COMPILED:
-        _FA2_COMPILED[key] = cute.compile(
-            FlashAttentionForwardAmpere(D, m_block, n_block, threads, win).call_a_shape,
-            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-            n_init_blocks, scale, cu_stream,
-            with_diagonal,
-        )
-    return _FA2_COMPILED[key]
 
 
 def tile_stride_matching(
@@ -270,11 +234,10 @@ class ToMeSAMAttention(Attention):
         num_n_blocks = (Sq + n_block - 1) // n_block
         n_keep_cols = int(ratio * num_n_blocks)
         n_init_blocks = n_keep_cols if is_global else n_keep_cols + 1
-        compiled = _get_fa2_compiled_a_shape(
+        compiled = FlashAttentionForwardAmpere.get_compiled_a_shape(
+            D, m_block, n_block, threads, win, is_global,
             q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
             n_init_blocks, self.scale, cu_stream,
-            D, m_block, n_block, threads, win,
-            with_diagonal=is_global,
         )
         compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
                  n_init_blocks, self.scale, cu_stream)
@@ -366,7 +329,9 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             threads = _FA2_THREADS_LOCAL
 
         compile_key = (win, D, m_block, n_block, threads, is_global)
-        if compile_key in seen or not _fa2_can_implement(D, m_block, n_block, threads):
+        if compile_key in seen or not FlashAttentionForwardAmpere.cached_can_implement(
+            _FA2_DTYPE_FP16, D, m_block, n_block, threads, win,
+        ):
             seen.add(compile_key)
             continue
         seen.add(compile_key)
@@ -401,11 +366,10 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
         )
         num_n_blocks = (Sq + n_block - 1) // n_block
         n_init_blocks_warm = int(0.5 * num_n_blocks)
-        _get_fa2_compiled_a_shape(
+        FlashAttentionForwardAmpere.get_compiled_a_shape(
+            D, m_block, n_block, threads, win, is_global,
             q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
             n_init_blocks_warm, attn.scale, cu_stream,
-            D, m_block, n_block, threads, win,
-            with_diagonal=is_global,
         )
         print("done")
 
