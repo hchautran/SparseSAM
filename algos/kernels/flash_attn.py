@@ -12,53 +12,13 @@ from cutlass.cute.runtime import from_dlpack
 import cutlass.pipeline as pipeline
 import cutlass.utils as utils
 
-"""
-Flash Attention v2 forward pass for NVIDIA Ampere SM80 using the CUTE DSL.
+"""Flash Attention v2 forward for NVIDIA Ampere SM80 in the CUTE DSL.
 
-Tensors: Q/K/V/O are (B, S, N, H) — batch, sequence, heads, head_dim.
-
-Algorithm per CTA (one m-block, one (batch, head) pair):
-  1. Load Q and the first K tile from GMEM→SMEM via CpAsync.
-  2. For each n-block (right-to-left):
-       a. S = Q * K^T  (tensor-core MMA, register pipeline).
-       b. Apply seqlen padding mask on the first n-block.
-       c. Online softmax update: rescale acc_O, accumulate row_max/row_sum.
-       d. O += P * V  (tensor-core MMA, register pipeline).
-       e. Prefetch next K tile.
-  3. Normalize O by row_sum; store to GMEM.
-
-Two positional-encoding variants share the same scaffolding:
-  • FlashAttentionForwardAmpereRelPos — SAM's decomposed (h_rel, w_rel) bias
-    added to S = Q·K^T per n-block. Exposes `call_a_shape`, which uses an
-    inline `(n_block < n_init_blocks)` predicate instead of a mask tensor,
-    bit-exactly matching the iteration order of an equivalent masked kernel.
-  • FlashAttentionForwardAmpereRoPE  — 2D-axial RoPE applied in-place on
-    Q (in prologue) and K (per n-block) before the S = Q·K^T MMA. Still uses
-    a (B,H,nm,nn) mask tensor (`m_block_mask` in `compute_one_n_block`).
-
-Constraints:
-  - Only fp16 / bf16 supported.
-  - Contiguous dim of each tensor must be ≥ 16 B aligned (head_dim % 8 == 0).
-  - log-sum-exp (for training backward) is not computed.
-  - m_block_size * 2 must be divisible by num_threads.
-"""
+Two positional-encoding variants share the base scaffolding: `FlashAttentionForwardAmpereRelPos` (SAM decomposed h/w bias, inline A-shape mask via `call_a_shape`) and `FlashAttentionForwardAmpereRoPE` (2D-axial RoPE, `(B,H,nm,nn)` mask tensor). Per-CTA pipeline: load Q + first K → for each n-block right-to-left run S=Q·K^T, online softmax, O+=P·V, prefetch next K → normalise by row_sum and store O. fp16/bf16 only; head_dim must be ≥8-aligned; `m_block_size*2` must divide `num_threads`."""
 
 
 class _FlashAttentionForwardAmpereBase:
-    """Shared FA2 scaffolding. Subclasses inject positional encoding via:
-
-        _pos_prepare_K(...)     — called at the top of each n-block, before S=Q·K^T.
-                                  RoPE: rotate sK in place (skip on first, prologue did it).
-                                  RelPos: no-op.
-        _pos_modify_scores(...) — called between S=Q·K^T and softmax.
-                                  RelPos: add (rRelH + rRelW) * inv_scale to acc_S.
-                                  RoPE: no-op.
-
-    Subclasses are responsible for their own `__call__` / `@cute.kernel kernel`
-    (prologue + per-CTA orchestration), since the prologue shape and SMEM
-    requirements differ. The shared parts live as `@cute.jit` helpers on this
-    base class.
-    """
+    """Shared FA2 scaffolding. Subclasses inject positional encoding via two hooks (no-ops on the base): `_pos_prepare_K` (called before each S=Q·K^T — RoPE rotates sK in place) and `_pos_modify_scores` (called between S=Q·K^T and softmax — RelPos adds the rel-pos bias to acc_S)."""
 
     def __init__(
         self,
@@ -76,13 +36,9 @@ class _FlashAttentionForwardAmpereBase:
             barrier_id=1, num_threads=num_threads
         )
 
-    # ── shared launch-descriptor builder ───────────────────────────────────
     def _make_launch_descriptors(self):
-        """Common SMEM layouts, GMEM copy atoms, and tiled-MMA for both variants.
-
-        Returns (sQ_layout, sKV_layout, gmem_tiled_copy_QKV, gmem_tiled_copy_O,
-                 tiled_mma).  Requires self._dtype to be set.
-        """
+        """Build the SMEM layouts, GMEM copy atoms, and tiled-MMA shared by both variants.
+        Returns `(sQ_layout, sKV_layout, gmem_tiled_copy_QKV, gmem_tiled_copy_O, tiled_mma)`; requires `self._dtype` to be set."""
         smem_k_block_size = 64 if self._head_dim_padded % 64 == 0 else 32
         swizzle_bits = 3 if smem_k_block_size == 64 else 2
         sQ_layout_atom = cute.make_composed_layout(
@@ -144,15 +100,8 @@ class _FlashAttentionForwardAmpereBase:
         inline_a_shape: cutlass.Constexpr = False,
         with_diagonal: cutlass.Constexpr = True,
     ):
-        """Process one n-block: optional K-prep, S=Q·K^T, optional score modify,
-        online softmax, O+=P·V, prefetch next K.
-
-        Mask source (in priority order):
-          no_mask=True              → block_enabled = True always
-          inline_a_shape=True       → block_enabled = (n_block < basic_params.n_init_blocks)
-                                                       [| (n_block == m_block) if with_diagonal]
-          default                   → block_enabled = basic_params.m_block_mask[b,h,m,n] (tensor read)
-        """
+        """Run one n-block (optional K-prep → S=Q·K^T → optional score modify → online softmax → O+=P·V → next-K prefetch).
+        Mask source: `no_mask=True` → always enabled; `inline_a_shape=True` → `(n_block < n_init_blocks) [| n_block == m_block if with_diagonal]`; else `m_block_mask[b,h,m,n]` GMEM read."""
         acc_S = cute.make_rmem_tensor(
             mma_params.thr_mma.partition_shape_C((self._m_block_size, self._n_block_size)),
             cutlass.Float32,
@@ -355,11 +304,8 @@ class _FlashAttentionForwardAmpereBase:
         n_tile_size: cutlass.Constexpr,
         n_tile_coord: cutlass.Int32,
     ):
-        """Apply online softmax to acc_S and rescale acc_O.
-
-        Uses exp2(x * log2e - max * log2e) to fuse scale into the exponent.
-        Rescales acc_O by exp(prev_max - cur_max) to maintain the running sum invariant.
-        """
+        """Apply online softmax to acc_S and rescale acc_O by `exp(prev_max - cur_max)` to keep the running sum invariant.
+        Uses `exp2(x·log2e − max·log2e)` so the softmax scale folds into the exponent."""
         acc_S_mn = self._make_acc_tensor_mn_view(acc_S)
         acc_O_mn = self._make_acc_tensor_mn_view(mma_params.acc_O)
 
@@ -446,10 +392,8 @@ class _FlashAttentionForwardAmpereBase:
         num_head,
         m_block,
     ):
-        """Normalize O, cast to output dtype, smem stage, then predicated GMEM store.
-
-        Reuses the sQ SMEM buffer for sO since the layouts are identical.
-        """
+        """Normalize O, cast to output dtype, stage through SMEM, then predicated GMEM store.
+        Reuses the sQ SMEM buffer as sO since their layouts are identical."""
         self.normalize_softmax(acc_O, row_sum)
         rO = cute.make_fragment_like(acc_O, self._dtype)
         rO.store(acc_O.load().to(self._dtype))
@@ -532,30 +476,10 @@ class _FlashAttentionForwardAmpereBase:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
-    """FA2 + SAM's decomposed (h_rel, w_rel) relative-position bias.
+    """FA2 + SAM's decomposed (h_rel, w_rel) rel-pos bias, staged once per m-block (sRelH/sRelW → rRelH/rRelW) and added to S=Q·K^T inside `_pos_modify_scores`.
+    Single launcher `call_a_shape` replaces the `(B,H,nm,nn)` mask tensor with an inline `(n_block < n_init_blocks)` (plus optional diagonal) predicate that bit-exactly matches the iteration order of an equivalent masked kernel; the class also owns per-config caches for the compiled kernel and `can_implement`."""
 
-    The bias is loaded once per m-block into SMEM (sRelH / sRelW), staged into
-    per-row RMEM tensors (rRelH / rRelW), then added to S = Q·K^T per n-block
-    via _pos_modify_scores.
-
-    Exposes one launcher: `call_a_shape` — uses an inline `(n_block < n_init_blocks)`
-    predicate (plus an optional diagonal at `n_block == m_block`) in place of a
-    (B,H,nm,nn) mask GMEM tensor. Bit-exactly matches the iteration order of an
-    equivalent masked kernel; the historical masked / structured variants were
-    removed in May 2026 because the SparseSAM patch only used the A-shape pattern.
-
-    The class also owns the compile cache so callers don't need to manage one:
-        compiled = FlashAttentionForwardAmpereRelPos.get_compiled_a_shape(
-            D, m_block, n_block, threads, win, with_diagonal,
-            q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-            n_init_blocks, scale, cu_stream,
-        )
-        compiled(q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
-                 n_init_blocks, scale, cu_stream)
-    """
-
-    # Per-class caches (keyed by config tuple). cute-compiled kernels and
-    # can_implement results are both per-config-deterministic.
+    # Per-config caches; both `cute.compile` and can_implement are deterministic in their key tuple.
     _COMPILED: dict = {}
     _CAN_IMPL: dict = {}
 
@@ -601,17 +525,13 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
     @classmethod
     def get_compiled_a_shape(
         cls,
-        # config (key)
         D: int, m_block: int, n_block: int, threads: int, win: int,
         with_diagonal: bool,
-        # cute compile args (used only on cache miss to bake in layouts)
+        # tensor args below: only consulted on cache miss for cute.compile to bake in layouts.
         q_c, k_c, v_c, o_c, rh_c, rw_c, perm_q_c, perm_k_c,
         n_init_blocks, scale, cu_stream,
     ):
-        """Compile + cache `call_a_shape` for the given config. Repeated calls
-        with the same (D, m_block, n_block, threads, win, with_diagonal) tuple
-        return the same compiled kernel (the tensor args are only consulted on
-        the first call to bake in shapes/dtypes/layouts via cute.compile)."""
+        """Compile + cache `call_a_shape` keyed by `(D, m_block, n_block, threads, win, with_diagonal)`; tensor args are only used on the first call to let cute.compile bake in shapes/dtypes/layouts."""
         key = (D, m_block, n_block, threads, win, with_diagonal)
         compiled = cls._COMPILED.get(key)
         if compiled is None:
@@ -624,14 +544,10 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
             cls._COMPILED[key] = compiled
         return compiled
 
-    # ─────────────────────────────────────────────────────────────────────
-    # A-shape inline-mask variant: bit-exact match with `kernel` for the
-    # A-shape (band=1 + keep-bar=n_init_blocks) and keep-bar-only patterns,
-    # but without the (B,H,nm,nn) mask tensor. Iteration order, K-prefetch
-    # chain, is_first/in_mask flags all match `kernel`; only the mask-tensor
-    # reads are replaced with inline (n_block < n_init_blocks) predicates.
-    # ─────────────────────────────────────────────────────────────────────
-
+    # A-shape inline-mask launcher: replaces a `(B,H,nm,nn)` mask tensor with the
+    # inline predicate `(n_block < n_init_blocks)` (plus `n_block == m_block` when
+    # `with_diagonal=True`); iteration order, K-prefetch chain, and is_first/in_mask
+    # flags all match the equivalent masked kernel for bit-exact FP order.
     @cute.jit
     def call_a_shape(
         self,
@@ -869,8 +785,7 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
             else:
                 tQsQ[None, m, None].fill(0)
 
-        # Inline A-shape mask for the prologue's last_block_enabled check.
-        # Matches the masked kernel's `m_block_mask[..., n_block]` read exactly.
+        # Inline A-shape predicate, matching what an `m_block_mask[..., n_block]` read would return.
         if cutlass.const_expr(with_diagonal):
             last_block_enabled = (n_block < n_init_blocks) | (n_block == m_block)
         else:
@@ -883,7 +798,7 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
                     tKsK[None, n, None].fill(0)
         cute.arch.cp_async_commit_group()
 
-        # Rel-pos staging (identical to `kernel`)
+        # Rel-pos GMEM→SMEM cooperative load (once per m-block — q_range is constant across n-blocks).
         n_rel_elems = self._m_block_size * self._win_shape
         for j in cutlass.range_constexpr(cute.ceil_div(n_rel_elems, self._num_threads)):
             flat_idx = tidx + j * self._num_threads
@@ -904,8 +819,7 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
                 rRelH[r, k] = sRelH[q_local, k].to(cutlass.Float32)
                 rRelW[r, k] = sRelW[q_local, k].to(cutlass.Float32)
 
-        # First n-block (n_block_max-1): is_first_n_block=True, in_mask_steps=True.
-        # Identical flag values to `kernel` so softmax/V-load FP-order matches.
+        # First n-block (n_block_max-1) uses is_first=True/in_mask=True to match an equivalent masked kernel's softmax/V-load FP order.
         basic_params.n_block = n_block_max - 1
         self.compute_one_n_block(
             basic_params, mma_params, gmem_copy_params, smem_copy_params,
@@ -914,7 +828,7 @@ class FlashAttentionForwardAmpereRelPos(_FlashAttentionForwardAmpereBase):
             inline_a_shape=True, with_diagonal=with_diagonal,
         )
 
-        # Remaining n-blocks (iterate right-to-left, exactly like `kernel`)
+        # Remaining n-blocks, right-to-left.
         for n_tile in range(1, n_block_max, 1):
             basic_params.n_block = n_block_max - n_tile - 1
             self.compute_one_n_block(
@@ -977,11 +891,8 @@ FlashAttentionForwardAmpere = FlashAttentionForwardAmpereRelPos
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FlashAttentionForwardAmpereRoPE(_FlashAttentionForwardAmpereBase):
-    """FA2 + fused 2D-axial RoPE. No rel-pos bias, no token permutations.
-
-    Q is rotated in SMEM once in the prologue; each K tile is rotated in SMEM
-    at the top of its n-block (or in the prologue for the first n-block).
-    """
+    """FA2 + fused 2D-axial RoPE — no rel-pos bias, no token permutations.
+    Q is rotated in SMEM once in the prologue; each K tile is rotated in SMEM at the top of its n-block (or in the prologue for the first one)."""
 
     @staticmethod
     def can_implement(dtype, head_dim, m_block_size, n_block_size, num_threads) -> bool:
@@ -1032,8 +943,7 @@ class FlashAttentionForwardAmpereRoPE(_FlashAttentionForwardAmpereBase):
             self._make_launch_descriptors()
         sO_layout = sQ_layout
 
-        # cos/sin SMEM uses simple row-major layout — read/written by element,
-        # not via ldmatrix / cp.async-128 in the rotation pass.
+        # cos/sin SMEM is plain row-major — read/written by element (no ldmatrix / cp.async-128 in the rotation pass).
         sCosQ_layout = cute.make_layout(
             (self._m_block_size, self._head_dim_padded),
             stride=(self._head_dim_padded, 1),
@@ -1276,9 +1186,7 @@ class FlashAttentionForwardAmpereRoPE(_FlashAttentionForwardAmpereBase):
             softmax_scale_log2=softmax_scale_log2,
         )
 
-        # ────────────────────────────────────────────────────────────────────
         # Prologue: load Q + Q's cos/sin, then rotate Q in SMEM in-place.
-        # ────────────────────────────────────────────────────────────────────
         for m in cutlass.range_constexpr(cute.size(tQsQ.shape[1])):
             if cute.elem_less(tQcQ[0, m, 0][1], mQ.layout.shape[1]):
                 cute.copy(
@@ -1376,8 +1284,7 @@ class FlashAttentionForwardAmpereRoPE(_FlashAttentionForwardAmpereBase):
         block_enabled,
         is_first_n_block: cutlass.Constexpr,
     ):
-        # On the first n-block, rotation already happened in the prologue.
-        # On subsequent enabled blocks, load this block's cos/sin and rotate sK.
+        # First n-block was already rotated in the prologue; for later enabled blocks, load this block's cos/sin and rotate sK.
         if cutlass.const_expr(not is_first_n_block):
             if block_enabled:
                 self._load_cos_sin_K(
@@ -1404,14 +1311,8 @@ class FlashAttentionForwardAmpereRoPE(_FlashAttentionForwardAmpereBase):
         d_pad: cutlass.Constexpr,
         d_real: cutlass.Int32,
     ):
-        """Apply pairwise RoPE rotation to a (rows, d) SMEM tile in-place.
-
-            x[r, 2i  ] ← x[r, 2i  ]·cos − x[r, 2i+1]·sin
-            x[r, 2i+1] ← x[r, 2i+1]·cos + x[r, 2i  ]·sin
-
-        cos[r, 2i] == cos[r, 2i+1] (axial RoPE uses repeat_interleave(2)),
-        same for sin — so we read one (cos, sin) per pair.
-        """
+        """Apply pairwise RoPE rotation to a (rows, d) SMEM tile in-place: `(x_2i, x_{2i+1}) ← (x_2i·c − x_{2i+1}·s, x_{2i+1}·c + x_2i·s)`.
+        Axial RoPE uses `repeat_interleave(2)` on cos/sin, so we read one `(cos, sin)` per pair."""
         tidx, _, _ = cute.arch.thread_idx()
         n_pairs = rows * (d_pad // 2)
         for j in cutlass.range_constexpr(cute.ceil_div(n_pairs, self._num_threads)):

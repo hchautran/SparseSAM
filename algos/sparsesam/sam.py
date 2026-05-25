@@ -95,8 +95,7 @@ def _wrap_perm(t: torch.Tensor) -> "cute.Tensor":
 
 _CU_STREAM = None
 def _get_cu_stream():
-    """Wrap the current default CUDA stream once and reuse. SAM-HQ inference
-    runs on the default stream, so this is safe for our call paths."""
+    """Wrap the default CUDA stream once and reuse (SAM-HQ inference runs on the default stream)."""
     global _CU_STREAM
     if _CU_STREAM is None:
         _CU_STREAM = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
@@ -111,17 +110,7 @@ def tile_stride_matching(
     perm_mode: str = "z_interleave_sort",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Order tokens for sparsesam attention; return (perm, inv_perm, inv_perm_group).
-
-    `perm_mode` is a hyphenated string `<space>_<layout>_<ranking>`:
-        space   ∈ {z, hilbert}     space-filling curve used as the base order
-        layout  ∈ {interleave, naive}
-                  interleave → all_raster.permute(0,2,1).reshape (groups
-                                striped across the sequence; current default)
-                  naive      → all_raster.reshape (groups stay contiguous)
-        ranking ∈ {sort, nosort}
-                  sort     → groups reordered by std+dissim score (current)
-                  nosort   → groups stay in space-filling order, identity rank
-    Default `'z_interleave_sort'` reproduces the original SparseSAM behavior."""
+    `perm_mode` is `<space>_<layout>_<ranking>`: space ∈ {z, hilbert}, layout ∈ {interleave, naive}, ranking ∈ {sort, nosort}."""
     N = H * W
     assert N % group_size == 0, f"N={N} must be divisible by group_size={group_size}"
 
@@ -207,9 +196,7 @@ class ToMeSAMAttention(Attention):
             p, ip, ipg = tile_stride_matching(
                 k, win, win, ratio=ratio, n_block=n_block, perm_mode=perm_mode,
             )
-            # Cache the int32 cast + cute wraps alongside — both are
-            # invariant across blocks that share this cache_key within
-            # a single forward (perm_cache resets per forward).
+            # Cache int32 perm + cute wraps too — invariant across blocks sharing this key within a forward.
             p_i32 = p.to(torch.int32)
             perm_cache[cache_key] = (p, ip, ipg, p_i32, _wrap_perm(p_i32), _wrap_perm(p_i32))
         perm, inv_perm, _, _, perm_q_c, perm_k_c = perm_cache[cache_key]
@@ -227,10 +214,7 @@ class ToMeSAMAttention(Attention):
         rh_c = _wrap_bias(rel_h)
         rw_c = _wrap_bias(rel_w)
 
-        # Static block-sparsity pattern (paper §4.1 Stripe-Sort):
-        #   global: A-shape (band=1 + keep-bar of floor(ratio·num_n_blocks) cols) → with_diagonal=True
-        #   win14:  keep-bar only of floor(ratio·num_n_blocks)+1 cols              → with_diagonal=False
-        # The +1 for win14 mirrors the historical mask construction (`n_keep_cols - band_width + 1`).
+        # A-shape sparsity (paper §4.1): global gets band+keep-bar (with_diagonal=True), win14 gets keep-bar only (+1 col mirrors the historical mask formula).
         num_n_blocks = (Sq + n_block - 1) // n_block
         n_keep_cols = int(ratio * num_n_blocks)
         n_init_blocks = n_keep_cols if is_global else n_keep_cols + 1
@@ -288,7 +272,7 @@ class ToMeSAMBlock(Block):
                 inv_perm_1d_group = global_cached[2]
                 nh = self.attn.num_heads
                 keep_n = max(1, round(ratio * x_seq.shape[1]))
-                # Avg head rank → topk avoids 2× full-N argsort+gather.
+                # Head-averaged rank — topk on it avoids 2× full-N argsort+gather.
                 avg_rank = inv_perm_1d_group.view(B, nh, -1).float().mean(dim=1)
                 top_idx  = avg_rank.topk(keep_n, dim=1, largest=False).indices
                 idx_e    = top_idx.unsqueeze(-1).expand(-1, -1, C)
@@ -304,9 +288,7 @@ class ToMeSAMBlock(Block):
 
 
 def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
-    """Pre-compile the FA2 a_shape kernel for every (win, m, n, threads) config
-    seen in the encoder so block 0's first forward doesn't pay the JIT cost.
-    Also primes attn._Rh / attn._Rw caches for each block."""
+    """Pre-compile the FA2 a_shape kernel for every distinct config in the encoder, and prime each block's attn._Rh/_Rw cache."""
     device = next(encoder.parameters()).device
     seen: set = set()
 
@@ -333,7 +315,7 @@ def _warmup_fa2_kernels(encoder: ImageEncoderViT) -> None:
             continue
         seen.add(compile_key)
 
-        # Build dummy inputs (zero tensors) so cute.compile can bake in layouts.
+        # Zero dummy tensors — cute.compile only needs them to bake in layouts.
         Sq, H = win * win, attn.num_heads
         zero = lambda *shape: torch.zeros(*shape, dtype=torch.float16, device=device)
         q, k, v, o = zero(1, Sq, H, D), zero(1, Sq, H, D), zero(1, Sq, H, D), zero(1, Sq, H, D)
@@ -369,12 +351,7 @@ def apply_patch(
     **_,
 ) -> ImageEncoderViT:
     """SparseSAM patch for the image encoder.
-
-    `mlp_merge`: True (default) runs the per-block MLP on the top
-    floor(ratio*N) "keep" tokens only; False runs it on the full token
-    set. `perm_mode`: ablation knob for the permutation strategy used by
-    `tile_stride_matching` — see its docstring for the format. `**_`
-    swallows extras forwarded by the registry."""
+    `mlp_merge=True` runs the per-block MLP only on the top floor(ratio*N) keep tokens; `perm_mode` selects the `tile_stride_matching` ranking strategy."""
     assert 0 < ratio <= 1.0, "ratio must be in (0, 1]"
 
     tome_info = {
@@ -390,7 +367,7 @@ def apply_patch(
         n = len(self.blocks)
         r = self.tome_info["ratio"]
         self.tome_info["ratio"]      = [r] * n
-        self.tome_info["perm_cache"] = {}   # reset per-image-forward
+        self.tome_info["perm_cache"] = {}   # per-forward — perm depends on input k
 
         result = _orig_forward(self, x)
 
