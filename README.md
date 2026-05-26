@@ -92,11 +92,13 @@ algos/                          # all algorithm code + vendored upstream models
 ├── gradtome/                     Gradient-aware bipartite matching (StructSAM)
 ├── sparsesam/                    SparseSAM Stripe-Sort attn + Residual-Consistency MLP
 ├── sparge/                       SpargeAttn drop-in sparse attention (integration layer)
+├── piecewise/                    Piecewise sparse attention integration for SAM-HQ
 ├── kernels/                      fused cutlass-DSL CUDA kernels (FA2 + rel-pos / RoPE)
 └── 3rd_party/                    upstream model sources (vendored submodules)
     ├── sam-hq/                     SAM-HQ model + predictor + train pipeline
     ├── perception_models/          Meta's Perception Encoder source
     ├── SpargeAttn/                 SpargeAttn block-sparse attention kernels (pip install -e)
+    ├── piecewise-sparse-attention/ Piecewise sparse attention reference implementation
     └── lmms-eval/                  (unused; kept for archival)
 
 tasks/                          # eval / profile entry points, grouped by task
@@ -128,8 +130,8 @@ The code runs on Python 3.10–3.12; pick whichever matches your CUDA toolchain.
 
 ```bash
 # 1. Clone with submodules
-git clone --recurse-submodules <repo-url> SAM_Quantization
-cd SAM_Quantization
+git clone --recurse-submodules <repo-url> SparseSAM
+cd SparseSAM
 # (or, if already cloned)
 git submodule update --init --recursive
 
@@ -144,6 +146,7 @@ pip install -r requirements.txt
 # 4. Vendored submodules that ship as Python packages
 pip install -e algos/3rd_party/sam-hq
 pip install -e algos/3rd_party/perception_models
+pip install -e algos/3rd_party/piecewise-sparse-attention
 ```
 
 Optional / kernel deps:
@@ -186,7 +189,7 @@ apply_sam(sam.image_encoder, name="sparsesam", ratio=0.5)   # density 50%
 remove_all_sam(sam.image_encoder)                            # revert to baseline
 ```
 
-`apply_pe` + `remove_all_pe` follow the same shape for the Perception Encoder backbone. The registry advertises every algorithm: `sparsesam`, `sparsesam_pitome`, `sparsesam_random`, `tome`, `pitome`, `gradtome`, `gradtome_pitome`, `gradtome_hilbert`, `sparge`. See [`docs/ADDING_ALGORITHMS.md`](docs/ADDING_ALGORITHMS.md) for adding new ones.
+`apply_pe` + `remove_all_pe` follow the same shape for the Perception Encoder backbone. The registry advertises every algorithm: `sparsesam`, `sparsesam_pitome`, `sparsesam_random`, `tome`, `pitome`, `gradtome`, `gradtome_pitome`, `gradtome_hilbert`, `sparge`, and `piecewise`. See [`docs/ADDING_ALGORITHMS.md`](docs/ADDING_ALGORITHMS.md) for adding new ones.
 
 > **Interactive demo:** [`notebooks/sparsesam_demo.ipynb`](notebooks/sparsesam_demo.ipynb) — applies SparseSAM on a single image, sweeps density, and runs a per-block profile (attention vs MLP, windowed vs global) with side-by-side mask plots.
 
@@ -216,9 +219,34 @@ Reports **mIoU**, **Boundary IoU**, throughput, encoder latency, peak GPU memory
 
 ### SAM MS-COCO box-prompted
 
-Zero-shot box-prompted segmentation on COCO val2017 (GT boxes, or detections from DINO / H-DETR / YOLOX).
+Zero-shot box-prompted segmentation on COCO val2017 with detector-proposed boxes from **DINO**, **H-DETR**, or **YOLOX**. This task uses the local MMDetection configs under [`tasks/sam_coco/configs/`](tasks/sam_coco/configs/) and patches the injected SAM-HQ predictor with `piecewise`, `sparge`, `sparsesam`, `tome`, or `gradtome`.
 
-> **Note** — `tasks/sam_coco/eval_coco.py` is referenced by the paper but **not yet ported into this repo**; the directory currently ships empty. Add the entry-point script following the pattern of `tasks/sam_hq44k/eval_hq44k.py` to enable this task.
+Run the Python entry point directly:
+
+```bash
+python tasks/sam_coco/eval_coco.py \
+    --data-root /path/to/coco \
+    --model-type vit_l \
+    --model-ckt /path/to/ckpts/sam_hq_vit_l.pth \
+    --detector dino \
+    --det-checkpoint /path/to/ckpts/focalnet_l_dino.pth \
+    --det-sam-ckt /path/to/ckpts/sam_vit_l_0b3195.pth \
+    --algos none piecewise sparge sparsesam tome gradtome \
+    --ratios 0.30 0.50 0.70 \
+    --batch-sizes 1
+```
+
+Or use the wrapper with env-overridable knobs:
+
+```bash
+DATA_ROOT=/path/to/coco \
+CKPT_ROOT=/path/to/ckpts \
+SAM_QUANT_ROOT=/path/to/PTQ4SAM_parent \
+MODEL_TYPE=vit_l DETECTOR=dino \
+sh tasks/sam_coco/eval_coco.sh
+```
+
+See the full setup and dependency notes in [`docs/RUN_COCO.md`](docs/RUN_COCO.md).
 
 ### Perception Encoder ImageNet zero-shot
 
@@ -255,8 +283,8 @@ All numbers measured  on **NVIDIA A100X-20C (sm80)** · PyTorch 2.5.1 + CUDA 12.
 | Task | What it measures | Headline | Full results |
 |---|---|---|---|
 | SAM HQ-44K segmentation | SAM-HQ ViT-L, batch=8, full DIS5K-VD + ThinObject5K-TE | SparseSAM ~2× encoder speedup, ~84% memory drop, ±0.005 mIoU at r=0.7 | [tasks/sam_hq44k/RESULTS.md](tasks/sam_hq44k/RESULTS.md) |
+| SAM MS-COCO box-prompted segmentation | SAM-HQ ViT-B / ViT-L with DINO box prompts on first 500 val images | SparseSAM stays close to dense mAP while improving encoder latency; includes `piecewise`, `sparge`, `tome`, and `gradtome` baselines | [tasks/sam_coco/RESULTS.md](tasks/sam_coco/RESULTS.md) |
 | PE-Core-L14-336 ImageNet-1k zero-shot | full 50k val, batch=128, fp16 | SparseSAM (attn-only) ×1.27 speedup with 0 Top-1 drop at r=0.7 | [tasks/pe_imagenet/RESULTS.md](tasks/pe_imagenet/RESULTS.md) |
-| SAM MS-COCO box-prompted segmentation | SAM-B/L/H × DINO box prompts | _eval entry point not yet ported in this repo_ | — |
 
 ## Profiling
 
@@ -322,5 +350,7 @@ This work builds on:
 - **[ToMe](https://arxiv.org/abs/2210.09461)** — bipartite-soft-matching token merging; baseline + the file layout that `algos/` follows.
 - **[PiToMe](https://github.com/hchautran/PiToMe)** (NeurIPS 2024) — sister project, energy-margin variant of ToMe; the registry + per-algo file conventions in this repo are direct descendants.
 - **[SpargeAttn](https://github.com/thu-ml/SpargeAttn)** — top-k attention-mass sparsification kernel, integrated as the `sparge` baseline.
+- **[Piecewise Sparse Attention](https://github.com/NguyenHuuChi/piecewise-sparse-attention)** — piecewise sparse attention baseline integrated under [`algos/piecewise/`](algos/piecewise/).
 - **[StructSAM (GradToMe)](https://arxiv.org/abs/2603.07307)** — gradient-aware bipartite matching variant, integrated as the `gradtome` baseline.
 - **[Perception Encoder](https://github.com/facebookresearch/perception_models)** — Meta's PE backbone used for the ImageNet zero-shot CLIP evaluation track.
+- **[PTQ4SAM](https://github.com/chengtao-lv/PTQ4SAM)** and **MMDetection** — detector wrapper and ops used by the COCO evaluation path.

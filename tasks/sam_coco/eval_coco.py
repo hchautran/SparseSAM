@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Non-quantized SAM-HQ COCO sweep for SparseSAM algorithms."""
+"""SAM-HQ COCO sweep over (algo x ratio x batch_size).
+
+Reports encoder latency, peak memory, and COCO segm AP metrics.
+"""
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import gc
-import json
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -31,7 +34,50 @@ def reset_memory() -> None:
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
 
+
+
+class ImageEncoderCudaProfiler:
+    """Measure SAM image-encoder latency without including detector/mask decode."""
+
+    def __init__(self) -> None:
+        self._event_pairs: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
+        self._wrapped = False
+
+    def wrap_forward(self, module: torch.nn.Module) -> None:
+        if self._wrapped or not torch.cuda.is_available():
+            return
+        original_forward = module.forward
+
+        def wrapped_forward(*args, **kwargs):
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+            output = original_forward(*args, **kwargs)
+            end_event.record()
+            self._event_pairs.append((start_event, end_event))
+            return output
+
+        module.forward = wrapped_forward
+        self._wrapped = True
+
+    def summarize(self) -> Dict[str, float]:
+        if not self._event_pairs:
+            return {
+                "encoder_batch_mean_ms": 0.0,
+                "encoder_batch_std_ms": 0.0,
+                "encoder_per_image_mean_ms": 0.0,
+                "encoder_per_image_std_ms": 0.0,
+            }
+        torch.cuda.synchronize()
+        elapsed_ms = np.array([start.elapsed_time(end) for start, end in self._event_pairs], dtype=np.float64)
+        return {
+            "encoder_batch_mean_ms": float(np.mean(elapsed_ms)),
+            "encoder_batch_std_ms": float(np.std(elapsed_ms)),
+            "encoder_per_image_mean_ms": float(np.mean(elapsed_ms)),
+            "encoder_per_image_std_ms": float(np.std(elapsed_ms)),
+        }
 
 def _set_cfg_data_root(cfg, data_root: str | None) -> None:
     if not data_root or not hasattr(cfg, "data"):
@@ -72,6 +118,8 @@ def _prepare_mmdet(args):
     update_data_root(cfg)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+    if not hasattr(cfg, "total_epochs"):
+        cfg.total_epochs = cfg.get("runner", {}).get("max_epochs", 1)
     cfg = compat_cfg(cfg)
     setup_multi_processes(cfg)
 
@@ -83,7 +131,7 @@ def _prepare_mmdet(args):
         cfg.model.backbone.init_cfg = None
 
     cfg.model.model_type = args.model_type
-    cfg.model.sam_checkpoint = args.det_sam_ckt
+    cfg.model.sam_checkpoint = None if str(args.det_sam_ckt).lower() in {"none", "null", ""} else args.det_sam_ckt
     if args.det_checkpoint is not None:
         if "det_model_ckpt" in cfg.model:
             cfg.model.det_model_ckpt = args.det_checkpoint
@@ -154,13 +202,27 @@ def _prepare_mmdet(args):
 
 
 
+
+def _warmup_image_encoder(predictor, warmup_batches: int = 3) -> None:
+    if warmup_batches <= 0 or not torch.cuda.is_available():
+        return
+    encoder_dtype = next(predictor.model.image_encoder.parameters()).dtype
+    image_size = predictor.model.image_encoder.img_size
+    device = predictor.device
+    with torch.no_grad():
+        for _ in range(warmup_batches):
+            image = torch.zeros((1, 3, image_size, image_size), device=device, dtype=encoder_dtype)
+            input_image = predictor.model.preprocess(image).to(dtype=encoder_dtype)
+            predictor.model.image_encoder(input_image)
+    torch.cuda.synchronize()
+
 def _build_predictor(args, algo: str, ratio: float):
     from segment_anything import SamPredictor, sam_model_registry
 
     sam = sam_model_registry[args.model_type](checkpoint=args.model_ckt).to("cuda")
     predictor = SamPredictor(sam)
-    if algo != "none":
-        enable_sam_dtype_for_predictor(predictor, dtype=torch.float16)
+    sam_dtype = torch.float16
+    enable_sam_dtype_for_predictor(predictor, dtype=sam_dtype)
     remove_all_sam(predictor.model.image_encoder, mask_decoder=predictor.model.mask_decoder)
     if algo != "none" and ratio < 1.0:
         apply_sam(
@@ -184,6 +246,10 @@ def _evaluate_one(args, algo: str, ratio: float, batch_size: int) -> Dict[str, A
     data_loader = env["data_loader"]
 
     predictor = _build_predictor(args, algo, ratio)
+    _warmup_image_encoder(predictor, args.encoder_warmup_batches)
+    profiler = ImageEncoderCudaProfiler()
+    profiler.wrap_forward(predictor.model.image_encoder)
+
     model.det_model.to(cfg.device)
     model.replace_quant_sam(predictor)
     model.predictor.model.to(cfg.device)
@@ -229,11 +295,20 @@ def _evaluate_one(args, algo: str, ratio: float, batch_size: int) -> Dict[str, A
             metrics = dataset.evaluate(outputs, metric=args.eval, **eval_kwargs)
             print(metrics)
 
+    metrics.update(profiler.summarize())
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        metrics.update({
+            "peak_memory_allocated_mb": torch.cuda.max_memory_allocated() / 1024**2,
+            "peak_memory_reserved_mb": torch.cuda.max_memory_reserved() / 1024**2,
+        })
+
     metrics.update({
         "algo": algo,
         "ratio": ratio,
         "batch_size": batch_size,
         "num_images": len(dataset),
+        "sam_dtype": str(next(predictor.model.parameters()).dtype).replace("torch.", ""),
         "detector": args.detector,
         "model_type": args.model_type,
         "config": env["config"],
@@ -293,7 +368,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fuse-conv-bn", action="store_true")
     parser.add_argument("--cfg-options", nargs="+")
     parser.add_argument("--eval-options", nargs="+")
+    parser.add_argument("--encoder-warmup-batches", type=int, default=3)
     return parser.parse_args()
+
+
+def run_sweep(args: argparse.Namespace) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    runs = _runs(args.algos, args.ratios)
+    print(f"COCO sweep: {len(runs)} algo/ratio configs x {len(args.batch_sizes)} batch size(s)")
+    for algo, ratio in runs:
+        for batch_size in args.batch_sizes:
+            print(f"\n--- {algo} r={ratio:.2f} bs={batch_size} ---")
+            result = _evaluate_one(args, algo, ratio, batch_size)
+            results.append(result)
+            print(
+                f"segm_mAP={result.get('segm_mAP', float('nan')):.3f} "
+                f"segm_mAP_50={result.get('segm_mAP_50', float('nan')):.3f} "
+                f"enc/img={result.get('encoder_per_image_mean_ms', float('nan')):.1f} ms "
+                f"peak_mem={result.get('peak_memory_allocated_mb', float('nan')):.0f} MB"
+            )
+    return results
 
 
 def main() -> List[Dict[str, Any]]:
@@ -303,16 +397,7 @@ def main() -> List[Dict[str, Any]]:
     setup_reference_paths(args.sam_quant_root)
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    results: List[Dict[str, Any]] = []
-    runs = _runs(args.algos, args.ratios)
-    print(f"COCO sweep: {len(runs)} algo/ratio configs x {len(args.batch_sizes)} batch size(s)")
-    for algo, ratio in runs:
-        for batch_size in args.batch_sizes:
-            print(f"\n--- {algo} r={ratio:.2f} bs={batch_size} ---")
-            result = _evaluate_one(args, algo, ratio, batch_size)
-            results.append(result)
-            print(json.dumps(result, indent=2, default=str))
-
+    results = run_sweep(args)
     csv = Path(args.output_dir) / f"sam_coco_eval_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     pd.DataFrame(results).to_csv(csv, index=False)
     print(f"\nResults saved -> {csv}")
