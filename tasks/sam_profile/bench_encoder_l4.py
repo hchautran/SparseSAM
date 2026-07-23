@@ -116,12 +116,21 @@ def main():
         patch = enc.patch_embed.proj.kernel_size[0]
         Ntok = (args.img_size // patch) ** 2
         reset_mem()
-        med, best = time_encoder(enc, x, args.iters, args.warmup)
-        peak = torch.cuda.max_memory_allocated() / 1024**2
-        g_fv = fvcore_gflops(enc, x)
-        g_an = analytic_encoder_gflops(enc, Ntok, 1.0) * bs
-        rows.append(("baseline", "-", bs, med, best, peak, 1.0, g_fv, g_an))
-        base_med = med
+        try:
+            med, best = time_encoder(enc, x, args.iters, args.warmup)
+            peak = torch.cuda.max_memory_allocated() / 1024**2
+            g_fv = fvcore_gflops(enc, x)
+            g_an = analytic_encoder_gflops(enc, Ntok, 1.0) * bs
+            rows.append(("baseline", "-", bs, med, best, peak, 1.0, g_fv, g_an))
+            base_med = med
+        except torch.OutOfMemoryError:
+            # Expected at large batch: the dense baseline materializes the full
+            # BxHxNxN attention matrix. Report it rather than dying — "baseline
+            # does not fit, sparsesam does" is a result.
+            print(f"baseline bs={bs} OOM (dense attention doesn't fit)")
+            rows.append(("baseline", "-", bs, float("nan"), float("nan"),
+                         float("nan"), float("nan"), None, float("nan")))
+            base_med = None
         del enc; reset_mem()
 
         # ---- sparsesam across ratios ----
@@ -139,7 +148,8 @@ def main():
                 continue
             g_fv = fvcore_gflops(enc, x)
             g_an = analytic_encoder_gflops(enc, Ntok, r) * bs
-            rows.append((f"sparsesam", r, bs, med, best, peak, base_med / med, g_fv, g_an))
+            speedup = base_med / med if base_med is not None else float("nan")
+            rows.append((f"sparsesam", r, bs, med, best, peak, speedup, g_fv, g_an))
             remove_all_sam(enc); del enc; reset_mem()
 
     # ---- report ----

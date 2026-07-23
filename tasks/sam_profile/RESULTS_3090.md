@@ -19,7 +19,9 @@ reproduce the L4 numbers exactly; the **latency speedup is lower** on this GPU
 | 0.25     | 1.70×       | 2.9×            | 1.54×        | 0.9296       | −1.67%  |
 
 (Memory saving grows to **7.2×** at batch=8 — see below. Speedup is encoder-only;
-end-to-end is 1.3–1.6× depending on prompts/image.)
+full end-to-end including preprocessing and post-processing is **1.49–1.60×** at
+1 prompt/image and 1.51× at 10 — see
+[Full end-to-end](#full-end-to-end-including-prepost-processing-batch1).)
 
 ---
 
@@ -72,6 +74,130 @@ Same Amdahl story as the L4: the encoder dominates, so with 1 prompt e2e ≈ enc
 speedup; the unaccelerated decoder dilutes it at 10 prompts (1.68× → 1.51×). The
 decoder is much cheaper here than on the L4 (18.9 ms vs 44.2 ms at 10 prompts), so
 the dilution is milder in relative terms.
+
+## Full end-to-end, including pre/post-processing (batch=1)
+
+The table above starts from a GPU-resident tensor. This one is the *whole* thing an
+application actually pays for, matching `SamPredictor.set_image` / `.predict`
+step for step (`bench_e2e_full.py`):
+
+| stage        | what runs                                                              | where |
+|--------------|------------------------------------------------------------------------|-------|
+| `load`       | `cv2.imread` + BGR→RGB                                                 | disk + CPU |
+| `preprocess` | `ResizeLongestSide` (PIL bilinear) → HWC→CHW → H2D → normalize + pad → fp16 | CPU + copy |
+| `encoder`    | `image_encoder` (+ fp16→fp32 feature bridge)                           | GPU |
+| `prompt`     | `transform.apply_boxes` + `prompt_encoder`                             | CPU + GPU |
+| `decoder`    | `mask_decoder` (`hq_token_only`)                                       | GPU |
+| `postproc`   | `postprocess_masks` (2× interpolate to original size) + threshold      | GPU |
+| `d2h`        | masks + IoU → CPU numpy                                                | copy |
+
+10 real images from `input_imgs/` at native resolution (480×640 … 1365×2048), ms
+per image, median of 10 iterations. `wall` is a separate sync-free pass — the true
+wall clock; `sum` is the staged pass, which pays an extra `cudaSynchronize` per
+boundary. They agree to well under 1%, so the breakdown is trustworthy.
+
+**1 prompt/image**
+| algo           | load | preproc | encoder | prompt | decoder | postproc | d2h  | **e2e ms** | e2e speedup | img/s |
+|----------------|------|---------|---------|--------|---------|----------|------|------------|-------------|-------|
+| baseline       | —    | 6.84    | 99.20   | 0.72   | 5.03    | 0.10     | 0.17 | **111.2**  | 1.00×       | 9.0   |
+| sparsesam 0.25 | —    | 6.84    | 57.06   | 0.72   | 5.06    | 0.10     | 0.17 | **69.7**   | 1.60×       | 14.4  |
+| sparsesam 0.50 | —    | 6.81    | 65.85   | 0.71   | 4.99    | 0.10     | 0.16 | **78.6**   | 1.41×       | 12.7  |
+| sparsesam 0.75 | —    | 6.44    | 74.27   | 0.68   | 4.65    | 0.10     | 0.16 | **86.4**   | 1.29×       | 11.6  |
+
+**10 prompts/image**
+| algo           | load | preproc | encoder | prompt | decoder | postproc | d2h  | **e2e ms** | e2e speedup | img/s |
+|----------------|------|---------|---------|--------|---------|----------|------|------------|-------------|-------|
+| baseline       | —    | 6.86    | 100.95  | 0.72   | 18.14   | 0.29     | 0.76 | **127.5**  | 1.00×       | 7.8   |
+| sparsesam 0.25 | —    | 6.75    | 57.96   | 0.70   | 18.35   | 0.29     | 0.75 | **84.4**   | 1.51×       | 11.8  |
+| sparsesam 0.50 | —    | 6.58    | 66.60   | 0.68   | 18.39   | 0.29     | 0.75 | **93.3**   | 1.37×       | 10.7  |
+| sparsesam 0.75 | —    | 6.43    | 74.70   | 0.66   | 18.46   | 0.29     | 0.74 | **101.1**  | 1.26×       | 9.9   |
+
+**With JPEG/PNG decode included** (`--include-load`, 1 prompt/image): `load` costs
+16.2 ms/image on top, so baseline 130.1 ms → sparsesam 0.25 87.3 ms, **1.49×**.
+
+### What this changes vs the encoder-only story
+
+- **The non-encoder floor is real but small at 1 prompt.** Everything except the
+  encoder costs 12.0 ms (10.8% of e2e), so the Amdahl ceiling is 9.3× — the 1.74×
+  encoder speedup measured here lands almost intact as 1.60× e2e.
+- **Preprocessing, not the decoder, is the largest fixed cost at 1 prompt**
+  (6.8 ms vs 5.0 ms). It is single-threaded CPU work — PIL bilinear resize
+  dominates — and is entirely untouched by sparsification, so it is identical
+  across every row. Moving it to `apply_image_torch` on GPU, or overlapping it
+  with the previous image's encoder pass, would recover most of it.
+- **Post-processing is nearly free** (0.10–0.29 ms) even though it upscales to
+  full native resolution; the D2H mask copy is 0.17 ms at 1 prompt and 0.76 ms at
+  10. Neither is worth optimizing.
+- **Decode dominates the floor once you count disk I/O**: 16.2 ms of `cv2.imread`
+  is larger than preprocess + decoder combined, and drops e2e speedup 1.60× →
+  1.49×. In a real serving loop this is prefetchable, which is why it is off by
+  default.
+- **At 10 prompts the floor triples to 26.6 ms (20.8%)**, ceiling 4.8×, and e2e
+  speedup falls to 1.51×. Nearly all of that growth is the decoder (5.0 → 18.1 ms);
+  preprocess is flat by construction.
+
+Practical read: on this GPU SparseSAM turns a 9 img/s pipeline into 14.4 img/s at
+1 prompt, or 7.8 → 11.8 img/s at 10 prompts. The remaining headroom is in the
+CPU-side preprocess and the unaccelerated decoder, not in the encoder.
+
+## Implementation gain vs algorithmic gain
+
+The headline speedup compares a fused CUTLASS-DSL kernel against stock SAM-HQ
+attention, so it mixes "better kernel" with "better algorithm". `bench_impl_ablation.py`
+separates them with a **fused-dense control**: the identical CUTE kernel at
+`ratio=1.0`, i.e. dense mask, full MLP, no sparsification. It differs from the
+baseline *only* in implementation.
+
+ViT-L, batch=1, 1024², median of 20 iters:
+
+| config              | what it is                                   | lat ms | peak MB | vs A  | vs B  |
+|---------------------|----------------------------------------------|--------|---------|-------|-------|
+| **A** baseline      | stock attention (manual QKᵀ + rel-pos + PV)  | 100.17 | 2221.5  | 1.00× | 0.89× |
+| **B** fused-dense   | same CUTE kernel, dense, full MLP            | 89.36  | 765.3   | 1.12× | 1.00× |
+| **C** attn-sparse 0.25 | A-shape sparse attention, full MLP        | 73.61  | 765.3   | 1.36× | 1.21× |
+| **C** attn-sparse 0.50 | "                                         | 79.09  | 765.3   | 1.27× | 1.13× |
+| **D** sparsesam 0.25 | + keep-token MLP (the full method)          | 58.55  | 765.3   | 1.71× | 1.53× |
+| **D** sparsesam 0.50 | "                                           | 69.17  | 765.3   | 1.45× | 1.29× |
+| **E** tome 0.25     | baseline algorithm, stock attention          | 168.86 | 1992.3  | 0.59× | 0.53× |
+| **E** tome 0.50     | "                                            | 169.23 | 1992.3  | 0.59× | 0.53× |
+
+**B is a valid control**: its output matches the baseline to `max_abs=0.0088`,
+`rel=0.0017` on features with `std=1.0` — pure fp16 accumulation noise, so it
+computes the same dense attention, just faster.
+
+### The decomposition
+
+```
+sparsesam 0.25:  1.71x total  =  1.12x implementation  x  1.53x algorithmic
+sparsesam 0.50:  1.45x total  =  1.12x implementation  x  1.29x algorithmic
+```
+
+**The custom kernel is worth 1.12×; the algorithm is worth 1.53×.** Handing the
+baseline an equally good attention implementation removes only about a fifth of
+the reported speedup — the remainder is token sparsification and the keep-token
+MLP, which would transfer to any equally-optimized backend. Within the
+algorithmic 1.53×, the A-shape sparse attention contributes 1.21× and the
+keep-token MLP the remaining 1.26×.
+
+Caveat on B: it still pays SparseSAM's token-permutation cost, which a pure
+kernel swap would not. That inflates B's latency, so 1.12× is a *lower* bound on
+the implementation gain and 1.53× an upper bound on the algorithmic one.
+
+### Two things this ablation does *not* let us claim
+
+1. **The memory saving is implementation, not algorithm.** B already drops peak
+   memory to 765.3 MB — the full 2.9× — with zero sparsification, because the
+   fused kernel never materializes the B×H×N×N attention matrix. Every memory
+   number in this document is attributable to the kernel, not to token merging.
+2. **The ToMe baseline here is not latency-competitive, and that is an
+   implementation artifact.** At 168.9 ms it is *slower than not merging at all*
+   (100.2 ms): it runs full-N attention and then pays a per-block bipartite
+   matching cost that exceeds the MLP saving it buys. Its near-identical latency
+   at ratio 0.25 and 0.50 (168.86 / 169.23 ms) confirms matching overhead, not
+   token count, dominates. Any head-to-head *latency* claim against ToMe measures
+   our kernel against its reference implementation. Baseline comparisons should
+   be made on density / GMAC / accuracy — which are implementation-free — or with
+   the baselines given comparable kernels.
 
 ## Accuracy — mIoU (COIFT, box-prompted, SAM-HQ ViT-L)
 
@@ -133,6 +259,16 @@ PYTHONPATH=/SparseSAM python tasks/sam_profile/bench_encoder_l4.py --model-type 
     --batch-sizes 8 --iters 10 --warmup 3
 PYTHONPATH=/SparseSAM python tasks/sam_profile/flops_encoder_l4.py --model-type vit_l --ratios 0.25 0.5 0.75
 PYTHONPATH=/SparseSAM python tasks/sam_profile/bench_e2e_l4.py --model-type vit_l --ratios 0.25 0.5 --prompts 1 10
+
+# implementation vs algorithmic gain (fused-dense control)
+PYTHONPATH=/SparseSAM python tasks/sam_profile/bench_impl_ablation.py --model-type vit_l \
+    --ratios 0.25 0.5
+
+# full end-to-end with per-stage breakdown (uses real images from input_imgs/)
+PYTHONPATH=/SparseSAM python tasks/sam_profile/bench_e2e_full.py --model-type vit_l \
+    --ratios 0.25 0.5 0.75 --prompts 1 10
+PYTHONPATH=/SparseSAM python tasks/sam_profile/bench_e2e_full.py --model-type vit_l \
+    --ratios 0.25 --prompts 1 --include-load          # add JPEG/PNG decode
 
 # accuracy — needs ckts/sam_hq_vit_l.pth + data/thin_object_detection/COIFT
 PYTHONPATH=/SparseSAM python tasks/sam_hq44k/eval_miou_l4.py --num-samples 280 --ratios 0.25 0.5 0.75
