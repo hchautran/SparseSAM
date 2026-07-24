@@ -1,0 +1,15 @@
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l batch=1 img=1024
+
+--- P=1 prompts/image ---
+algo         enc_ms   dec_ms   e2e_ms enc_spd e2e_spd
+baseline      188.7      5.8    194.5    1.00    1.00
+sparse0.25     83.2      5.8     88.9    2.27    2.19
+sparse0.50     97.1      5.8    102.9    1.94    1.89
+
+--- P=10 prompts/image ---
+algo         enc_ms   dec_ms   e2e_ms enc_spd e2e_spd
+baseline      191.1     46.4    237.5    1.00    1.00
+sparse0.25     85.2     46.7    132.0    2.24    1.80
+sparse0.50     97.5     46.5    144.0    1.96    1.65
+

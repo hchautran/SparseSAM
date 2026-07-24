@@ -1,0 +1,17 @@
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l bs=1 img=1024 iters=20 warmup=5
+
+config                   lat_ms   min_ms   peak_MB    vs A    vs B
+------------------------------------------------------------------
+A baseline               191.51   188.61    2221.5   1.00x   0.66x
+B fused-dense            127.05   121.35     765.3   1.51x   1.00x
+C attn-sparse 0.25       116.79   109.99     765.3   1.64x   1.09x
+C attn-sparse 0.50       119.47   115.64     765.3   1.60x   1.06x
+D sparsesam 0.25          89.45    83.27     765.3   2.14x   1.42x
+D sparsesam 0.50          99.65    96.15     765.3   1.92x   1.27x
+E tome 0.25              259.48   252.97    1992.3   0.74x   0.49x
+E tome 0.50              261.84   249.80    1992.3   0.73x   0.49x
+
+implementation gain (A/B, kernel only, no algorithm): 1.51x
+  D sparsesam 0.25: total 2.14x = implementation 1.51x x algorithmic 1.42x
+  D sparsesam 0.50: total 1.92x = implementation 1.51x x algorithmic 1.27x
