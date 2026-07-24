@@ -1,0 +1,41 @@
+/venv/main/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/venv/main/lib/python3.12/site-packages/timm/models/registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_5m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_5m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_11m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_11m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_384 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_384. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_512 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_512. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+GPU: NVIDIA A10 cc(8, 6)
+model=vit_l batch=1 img=1024
+
+--- P=1 prompts/image ---
+algo         enc_ms   dec_ms   e2e_ms enc_spd e2e_spd
+baseline      129.7      6.0    135.7    1.00    1.00
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+sparse0.25     73.3      6.0     79.3    1.77    1.71
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+sparse0.50     86.5      6.0     92.4    1.50    1.47
+
+--- P=10 prompts/image ---
+algo         enc_ms   dec_ms   e2e_ms enc_spd e2e_spd
+baseline      130.2     29.0    159.2    1.00    1.00
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+sparse0.25     73.6     29.5    103.1    1.77    1.54
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+sparse0.50     86.8     29.5    116.3    1.50    1.37
+
