@@ -39,11 +39,24 @@ def reset_memory() -> None:
 
 
 class ImageEncoderCudaProfiler:
-    """Measure SAM image-encoder latency without including detector/mask decode."""
+    """Measure SAM image-encoder latency and memory without including detector/mask decode.
+
+    Memory needs the same scoping as latency. A whole-run
+    ``torch.cuda.max_memory_allocated()`` is dominated by the detector forward and
+    by the mask decoder upsampling every detected box to original resolution --
+    both algorithm-independent -- so encoder savings never surface. Instead the
+    peak counter is reset immediately before each encoder call and read right
+    after, giving the encoder's own footprint. Allocator stats are updated
+    synchronously on the Python side, so no ``cuda.synchronize()`` is needed here
+    and the latency measurement stays untouched.
+    """
 
     def __init__(self) -> None:
         self._event_pairs: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         self._wrapped = False
+        self._baseline_bytes: list[int] = []
+        self._peak_bytes: list[int] = []
+        self._pipeline_peak_bytes = 0
 
     def wrap_forward(self, module: torch.nn.Module) -> None:
         if self._wrapped or not torch.cuda.is_available():
@@ -51,12 +64,21 @@ class ImageEncoderCudaProfiler:
         original_forward = module.forward
 
         def wrapped_forward(*args, **kwargs):
+            # Fold whatever the detector/decoder peaked at since the last reset
+            # into the pipeline high-water mark before clearing the counter.
+            self._pipeline_peak_bytes = max(self._pipeline_peak_bytes, torch.cuda.max_memory_allocated())
+            baseline = torch.cuda.memory_allocated()
+            torch.cuda.reset_peak_memory_stats()
+
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
             output = original_forward(*args, **kwargs)
             end_event.record()
             self._event_pairs.append((start_event, end_event))
+
+            self._baseline_bytes.append(baseline)
+            self._peak_bytes.append(torch.cuda.max_memory_allocated())
             return output
 
         module.forward = wrapped_forward
@@ -69,14 +91,27 @@ class ImageEncoderCudaProfiler:
                 "encoder_batch_std_ms": 0.0,
                 "encoder_per_image_mean_ms": 0.0,
                 "encoder_per_image_std_ms": 0.0,
+                "encoder_peak_memory_mb": 0.0,
+                "encoder_activation_mb": 0.0,
+                "pipeline_peak_memory_mb": 0.0,
             }
         torch.cuda.synchronize()
         elapsed_ms = np.array([start.elapsed_time(end) for start, end in self._event_pairs], dtype=np.float64)
+        peak = np.array(self._peak_bytes, dtype=np.float64)
+        baseline = np.array(self._baseline_bytes, dtype=np.float64)
+        pipeline_peak = max(self._pipeline_peak_bytes, torch.cuda.max_memory_allocated())
         return {
             "encoder_batch_mean_ms": float(np.mean(elapsed_ms)),
             "encoder_batch_std_ms": float(np.std(elapsed_ms)),
             "encoder_per_image_mean_ms": float(np.mean(elapsed_ms)),
             "encoder_per_image_std_ms": float(np.std(elapsed_ms)),
+            # Absolute allocator high-water mark during an encoder forward
+            # (resident weights + encoder activations).
+            "encoder_peak_memory_mb": float(np.max(peak)) / 1024**2,
+            # Encoder activations alone -- the algorithm-sensitive number.
+            "encoder_activation_mb": float(np.max(peak - baseline)) / 1024**2,
+            # Whole-pipeline peak, kept for reference; detector-dominated.
+            "pipeline_peak_memory_mb": float(pipeline_peak) / 1024**2,
         }
 
 def _set_cfg_data_root(cfg, data_root: str | None) -> None:
@@ -216,6 +251,14 @@ def _warmup_image_encoder(predictor, warmup_batches: int = 3) -> None:
             predictor.model.image_encoder(input_image)
     torch.cuda.synchronize()
 
+def _sam_resident_mb(predictor) -> float:
+    """Bytes the SAM model itself occupies on the GPU (params + buffers)."""
+    model = predictor.model
+    total = sum(t.numel() * t.element_size() for t in model.parameters())
+    total += sum(t.numel() * t.element_size() for t in model.buffers())
+    return total / 1024**2
+
+
 def _build_predictor(args, algo: str, ratio: float):
     from segment_anything import SamPredictor, sam_model_registry
 
@@ -295,13 +338,21 @@ def _evaluate_one(args, algo: str, ratio: float, batch_size: int) -> Dict[str, A
             metrics = dataset.evaluate(outputs, metric=args.eval, **eval_kwargs)
             print(metrics)
 
-    metrics.update(profiler.summarize())
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-        metrics.update({
-            "peak_memory_allocated_mb": torch.cuda.max_memory_allocated() / 1024**2,
-            "peak_memory_reserved_mb": torch.cuda.max_memory_reserved() / 1024**2,
-        })
+    # Encoder-scoped memory comes from the profiler. A process-wide
+    # max_memory_allocated() read here would be meaningless anyway: the profiler
+    # resets the peak counter on every encoder call.
+    encoder_metrics = profiler.summarize()
+    metrics.update(encoder_metrics)
+
+    # "Peak GPU" in the SAM-HQ / HQ-44K convention: resident SAM weights plus the
+    # encoder's own activation peak, as one absolute number. Built from the SAM
+    # model alone so the co-resident detector does not inflate it -- that is the
+    # only way to make this directly comparable with tasks/sam_hq44k.
+    sam_weights_mb = _sam_resident_mb(predictor)
+    metrics.update({
+        "sam_weights_mb": sam_weights_mb,
+        "peak_gpu_mb": sam_weights_mb + encoder_metrics["encoder_activation_mb"],
+    })
 
     metrics.update({
         "algo": algo,
@@ -385,7 +436,8 @@ def run_sweep(args: argparse.Namespace) -> List[Dict[str, Any]]:
                 f"segm_mAP={result.get('segm_mAP', float('nan')):.3f} "
                 f"segm_mAP_50={result.get('segm_mAP_50', float('nan')):.3f} "
                 f"enc/img={result.get('encoder_per_image_mean_ms', float('nan')):.1f} ms "
-                f"peak_mem={result.get('peak_memory_allocated_mb', float('nan')):.0f} MB"
+                f"peak_gpu={result.get('peak_gpu_mb', float('nan')):.0f} MB "
+                f"enc_act={result.get('encoder_activation_mb', float('nan')):.0f} MB"
             )
     return results
 
