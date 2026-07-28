@@ -1,0 +1,5 @@
+baseline   lin/conv=  1311.1  attn=  176.8  total=  1487.9 GMAC
+           fvcore total =   1493.8 GMAC  (cross-check)
+sparsesam r=0.25  lin/conv=   924.6  attn=   44.2  total=   968.8 GMAC   (1.54x fewer vs baseline)
+sparsesam r=0.50  lin/conv=  1053.4  attn=   88.4  total=  1141.8 GMAC   (1.30x fewer vs baseline)
+sparsesam r=0.75  lin/conv=  1182.3  attn=  132.6  total=  1314.8 GMAC   (1.13x fewer vs baseline)

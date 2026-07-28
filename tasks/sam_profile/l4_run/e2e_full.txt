@@ -1,0 +1,60 @@
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l images=10 sizes=[(480, 640), (533, 800), (683, 1024), (720, 1280), (1000, 894), (1024, 1024), (1365, 2048)]
+iters=10 warmup=3 include_load=False
+
+=== P=1 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.66     188.15       0.79       5.01       0.12       0.20    201.94    205.23  1.00x    4.9
+sparsesam 0.25       0.01       7.66      83.39       0.78       5.27       0.12       0.20     97.42     98.34  2.09x   10.2
+
+baseline non-encoder floor: 17.08 ms/image (8.3% of e2e) — Amdahl ceiling 12.02x however fast the encoder gets
+
+=== P=10 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.69     227.61       0.81      50.07       0.65       0.97    287.82    376.55  1.00x    2.7
+sparsesam 0.25       0.01       7.72     154.78       0.81      60.80       0.81       0.96    225.89    209.87  1.79x    4.8
+
+baseline non-encoder floor: 148.93 ms/image (39.6% of e2e) — Amdahl ceiling 2.53x however fast the encoder gets
+
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l images=10 sizes=[(480, 640), (533, 800), (683, 1024), (720, 1280), (1000, 894), (1024, 1024), (1365, 2048)]
+iters=10 warmup=3 include_load=False
+
+=== P=1 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.66     192.34       0.78       5.19       0.12       0.20    206.31    210.06  1.00x    4.8
+sparsesam 0.50       0.01       7.66     134.77       0.77       7.13       0.16       0.20    150.70    158.06  1.33x    6.3
+
+baseline non-encoder floor: 17.72 ms/image (8.4% of e2e) — Amdahl ceiling 11.86x however fast the encoder gets
+
+=== P=10 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.87     344.13       0.86      61.96       0.86       0.87    416.56    421.09  1.00x    2.4
+sparsesam 0.50       0.01       7.73     194.16       0.81      63.43       0.86       0.87    267.86    261.36  1.61x    3.8
+
+baseline non-encoder floor: 76.96 ms/image (18.3% of e2e) — Amdahl ceiling 5.47x however fast the encoder gets
+
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l images=10 sizes=[(480, 640), (533, 800), (683, 1024), (720, 1280), (1000, 894), (1024, 1024), (1365, 2048)]
+iters=10 warmup=3 include_load=False
+
+=== P=1 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.84     192.34       0.81       5.19       0.12       0.20    206.50    210.38  1.00x    4.8
+sparsesam 0.75       0.01       7.78     152.02       0.80       7.12       0.16       0.20    168.09    184.69  1.14x    5.4
+
+baseline non-encoder floor: 18.05 ms/image (8.6% of e2e) — Amdahl ceiling 11.66x however fast the encoder gets
+
+=== P=10 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.01       7.74     324.45       0.83      61.25       0.82       0.87    395.97    446.77  1.00x    2.2
+sparsesam 0.75       0.01       7.73     206.50       0.81      60.67       0.80       0.87    277.38    289.66  1.54x    3.5
+
+baseline non-encoder floor: 122.32 ms/image (27.4% of e2e) — Amdahl ceiling 3.65x however fast the encoder gets
+

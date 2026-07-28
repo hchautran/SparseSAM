@@ -1,0 +1,15 @@
+############ batch=8 ############
+  return register_model(fn_wrapper)
+  return register_model(fn_wrapper)
+  return register_model(fn_wrapper)
+  return register_model(fn_wrapper)
+  return register_model(fn_wrapper)
+GPU: NVIDIA A10 cc(8, 6)
+model=vit_l img=1024 iters=10 warmup=3
+
+algo       ratio  bs lat_med_ms lat_min_ms   peak_MB speedup  GFLOPs_fv  GFLOPs_an
+----------------------------------------------------------------------------------
+baseline       -   8     981.77     978.85   13766.2    1.00    11950.8    32985.3
+sparsesam   0.25   8     549.07     546.21    1908.1    1.79        n/a    23089.7
+sparsesam   0.50   8     648.26     645.31    1908.1    1.51        n/a    26388.3
+sparsesam   0.75   8     739.80     738.21    1908.1    1.33        n/a    29686.8

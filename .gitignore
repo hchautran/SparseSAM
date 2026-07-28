@@ -1,0 +1,75 @@
+
+# Exclude checkpoint and model folders
+checkpoint_sam/
+sam-hq/
+sam2/
+segment-anything/
+data/
+hq_ckts/
+ckts/
+quarot/fast-hadamard-transform/
+sam2_ckts/
+demo/
+GroundingDINO/
+quant/load_coco_ptq4sam/
+fast-hadamard-transform/
+seginw_output/
+PTQ4SAM/
+Semantic-Segmentation-Anything/
+decoder_quant_r/
+sam-mmrotate/
+quant/qgemm/third-party/
+attention_utilsdebug.py
+attention_utilsdebug.ipynb
+decoder_quant.py
+ckts.zip
+result/
+encoder_quant_1.py
+quant_utils_1.py
+benchmark_results/ade20k/
+# Exclude Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.png
+.Python
+*.o
+
+# Exclude common temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude log files
+*.log
+*.pt
+__pycache__/
+hq_ckts/
+ckts/
+*.egg-info
+*/sam-hq/
+*.pth
+work_dirs/
+*.cmake
+*/build
+CMakeCache.txt
+# CMakeLists.txt
+Makefile
+*.so
+*/CmakeFiles
+*.csv
+wandb/*
+.outputs/
+benchmark_results/
+# Claude Code local artifacts
+CLAUDE.md
+.claude/
+.claude.json

@@ -1,0 +1,9 @@
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l img=1024 iters=10 warmup=3
+
+algo       ratio  bs lat_med_ms lat_min_ms   peak_MB speedup  GFLOPs_fv  GFLOPs_an
+----------------------------------------------------------------------------------
+baseline       -   8    1664.78    1630.95   13766.2    1.00    11950.8    32985.3
+sparsesam   0.25   8     806.02     796.50    1908.1    2.07        n/a    23089.7
+sparsesam   0.50   8     920.47     912.67    1908.1    1.81        n/a    26388.3
+sparsesam   0.75   8    1031.59    1021.05    1908.1    1.61        n/a    29686.8

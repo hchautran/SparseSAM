@@ -1,0 +1,48 @@
+/venv/main/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/venv/main/lib/python3.12/site-packages/timm/models/registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_5m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_5m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_11m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_11m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_384 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_384. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_512 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_512. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+GPU: NVIDIA A10 cc(8, 6)
+model=vit_l bs=1 img=1024 iters=20 warmup=5
+
+[ToMe-SAM] patched  algo=tome  ratio=1.0  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=False  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=full-MLP (no partial)
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=False  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=full-MLP (no partial)
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.25  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] patched  algo=tome  ratio=0.5  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+config                   lat_ms   min_ms   peak_MB    vs A    vs B
+------------------------------------------------------------------
+A baseline               130.83   130.29    2221.5   1.00x   0.87x
+B fused-dense            113.65   112.88     765.3   1.15x   1.00x
+C attn-sparse 0.25        91.01    90.04     765.3   1.44x   1.25x
+C attn-sparse 0.50        99.51    98.90     765.3   1.31x   1.14x
+D sparsesam 0.25          74.07    73.49     765.3   1.77x   1.53x
+D sparsesam 0.50          87.18    86.21     765.3   1.50x   1.30x
+E tome 0.25              194.50   178.42    1992.3   0.67x   0.58x
+E tome 0.50              193.83   174.60    1992.3   0.67x   0.59x
+
+implementation gain (A/B, kernel only, no algorithm): 1.15x
+  D sparsesam 0.25: total 1.77x = implementation 1.15x x algorithmic 1.53x
+  D sparsesam 0.50: total 1.50x = implementation 1.15x x algorithmic 1.30x

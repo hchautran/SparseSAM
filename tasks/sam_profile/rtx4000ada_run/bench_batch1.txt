@@ -1,0 +1,33 @@
+############ batch=1 ############
+/workspace/SparseSAM/.venv/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/workspace/SparseSAM/.venv/lib/python3.12/site-packages/timm/models/registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_5m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_5m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_11m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_11m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_384 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_384. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_512 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_512. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+GPU: NVIDIA RTX 4000 Ada Generation cc(8, 9)
+model=vit_l img=1024 iters=20 warmup=5
+
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.75  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+algo       ratio  bs lat_med_ms lat_min_ms   peak_MB speedup  GFLOPs_fv  GFLOPs_an
+----------------------------------------------------------------------------------
+baseline       -   1     141.62     141.48    2221.5    1.00     1493.8     4123.2
+sparsesam   0.25   1      64.12      63.94     766.5    2.21        n/a     2886.2
+sparsesam   0.50   1      74.78      74.53     766.5    1.89        n/a     3298.5
+sparsesam   0.75   1      84.03      83.85     766.5    1.69        n/a     3710.9

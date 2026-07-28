@@ -1,0 +1,12 @@
+GPU: NVIDIA L4 cc(8, 9)
+model=vit_l images=10 sizes=[(480, 640), (533, 800), (683, 1024), (720, 1280), (1000, 894), (1024, 1024), (1365, 2048)]
+iters=10 warmup=3 include_load=True
+
+=== P=1 prompt(s)/image — ms per image ===
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline            16.97       8.05     185.77       0.80       5.14       0.12       0.20    217.06    220.63  1.00x    4.5
+sparsesam 0.25      16.97       7.99     107.78       0.79       7.10       0.16       0.20    140.99    153.09  1.44x    6.5
+
+baseline non-encoder floor: 34.87 ms/image (15.8% of e2e) — Amdahl ceiling 6.33x however fast the encoder gets
+

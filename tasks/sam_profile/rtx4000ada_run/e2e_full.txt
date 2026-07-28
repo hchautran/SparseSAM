@@ -1,0 +1,56 @@
+/workspace/SparseSAM/.venv/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/workspace/SparseSAM/.venv/lib/python3.12/site-packages/timm/models/registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_5m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_5m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_11m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_11m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_224 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_224. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_384 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_384. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+/workspace/SparseSAM/algos/3rd_party/sam-hq/segment_anything/modeling/tiny_vit_sam.py:662: UserWarning: Overwriting tiny_vit_21m_512 in registry with segment_anything.modeling.tiny_vit_sam.tiny_vit_21m_512. This is because the name being registered conflicts with an existing name. Please check if this is not expected.
+  return register_model(fn_wrapper)
+GPU: NVIDIA RTX 4000 Ada Generation cc(8, 9)
+model=vit_l images=10 sizes=[(480, 640), (533, 800), (683, 1024), (720, 1280), (1000, 894), (1024, 1024), (1365, 2048)]
+iters=10 warmup=3 include_load=False
+
+=== P=1 prompt(s)/image — ms per image ===
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.75  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.00       6.19     142.62       0.68       3.86       0.09       0.18    153.62    153.44  1.00x    6.5
+sparsesam 0.25       0.00       6.05      63.38       0.59       3.83       0.09       0.19     74.14     74.30  2.07x   13.5
+sparsesam 0.50       0.00       6.00      73.31       0.59       3.83       0.09       0.19     84.01     84.07  1.83x   11.9
+sparsesam 0.75       0.00       6.02      82.45       0.59       3.83       0.09       0.19     93.17     93.06  1.65x   10.7
+
+baseline non-encoder floor: 10.83 ms/image (7.1% of e2e) — Amdahl ceiling 14.17x however fast the encoder gets
+
+=== P=10 prompt(s)/image — ms per image ===
+[ToMe-SAM] patched  algo=tome  ratio=0.25  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.5  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] patched  algo=tome  ratio=0.75  mlp_merge=True  perm_mode=z_interleave_sort  blocks=24 (global=4 local=20)  strategy=post-attn-merge / post-mlp-unmerge
+[ToMe-SAM] compiling FA2 kernel  win14  win=14  D=64  m=64  n=64  T=128   ... done
+[ToMe-SAM] compiling FA2 kernel  global  win=64  D=64  m=64  n=64  T=128   ... done
+algo                 load preprocess    encoder     prompt    decoder   postproc        d2h       sum      wall    spd  img/s
+-----------------------------------------------------------------------------------------------------------------------------
+baseline             0.00       6.01     142.49       0.62      33.65       0.52       1.09    184.39    184.45  1.00x    5.4
+sparsesam 0.25       0.00       6.02      62.56       0.60      34.37       0.52       1.09    105.16    105.23  1.75x    9.5
+sparsesam 0.50       0.00       6.17      72.36       0.67      34.39       0.53       1.10    115.22    115.34  1.60x    8.7
+sparsesam 0.75       0.00       6.27      81.41       0.71      34.42       0.54       1.10    124.46    124.32  1.48x    8.0
+
+baseline non-encoder floor: 41.96 ms/image (22.7% of e2e) — Amdahl ceiling 4.40x however fast the encoder gets
+
