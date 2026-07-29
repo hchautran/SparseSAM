@@ -277,7 +277,7 @@ Per-task tables, ablations, reproduce commands, and CSV pointers live next to ea
 
 ## Multi-GPU profiling
 
-SAM-HQ **ViT-L**, input 1024×1024, fp16 encoder, batch=1 unless noted. All numbers are median of ≥20 iterations after warmup. The FA2 CUTE kernel targets Ampere SM80 and compiles unchanged on SM86 and SM89 — memory, GFLOPs and accuracy are byte-identical across all GPUs; only wall-clock speedup varies.
+SAM-L, input 1024×1024, fp16 encoder, batch=1 unless noted. All numbers are median of ≥20 iterations after warmup. The FA2 CUTE kernel targets Ampere SM80 and compiles unchanged on SM86 and SM89 — memory, GFLOPs and accuracy are byte-identical across all GPUs; only wall-clock speedup varies.
 
 > Full per-GPU logs with reproduce commands: [tasks/sam_profile/RESULTS_L4.md](tasks/sam_profile/RESULTS_L4.md) · [tasks/sam_profile/RESULTS_RTX4000ADA.md](tasks/sam_profile/RESULTS_RTX4000ADA.md) · [tasks/sam_profile/RESULTS_A10.md](tasks/sam_profile/RESULTS_A10.md) · [tasks/sam_profile/RESULTS_A2000.md](tasks/sam_profile/RESULTS_A2000.md) · [tasks/sam_profile/RESULTS_3090.md](tasks/sam_profile/RESULTS_3090.md) · [tasks/sam_profile/RESULTS_COMPARISON.md](tasks/sam_profile/RESULTS_COMPARISON.md)
 
