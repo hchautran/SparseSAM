@@ -374,30 +374,6 @@ Density ≥0.50 costs under 0.4% mIoU; density 0.75 is effectively lossless.
 
 ### Implementation vs algorithmic gain
 
-> **On fair comparison with baselines.**
-> SparseSAM uses a custom fused CUTLASS-DSL kernel; ToMe and SpargeAttn run their
-> published reference implementations. This is an apples-to-oranges wall-clock
-> comparison. We address it with a **fused-dense control** (config B below): the
-> identical CUTE kernel run at `ratio=1.0` — dense mask, full MLP, zero
-> sparsification — differing from the baseline *only* in implementation. This lets
-> us separate "better kernel" from "better algorithm":
->
-> - **Kernel gain (A→B):** 1.12–1.51× depending on GPU bandwidth. This is the
->   implementation advantage. It would disappear if baselines were given an equally
->   optimised kernel.
-> - **Algorithmic gain (B→D):** 1.42–1.53× on every GPU (±3.5%). This is
->   hardware-independent and transfers to any equally-optimised backend — it is the
->   gain a fair implementation-matched comparison would show.
->
-> **ToMe appearing slower than the dense baseline is also an implementation
-> artifact.** Its reference code runs full-N attention and then pays a per-block
-> bipartite-matching pass whose cost exceeds the MLP saving it buys (~169 ms vs
-> 100 ms on the 3090). Its near-identical latency at density 0.25 and 0.50 confirms
-> it is matching overhead, not token count, that dominates. **Wall-clock comparisons
-> against ToMe are not meaningful; the correct baseline is density / GMAC /
-> accuracy**, which are implementation-free. These are reported in the Results and
-> Accuracy sections above.
-
 `bench_impl_ablation.py` decomposes the speedup into kernel gain (fused CUTE kernel vs stock attention) and algorithmic gain (token sparsification + keep-token MLP). The algorithmic gain is hardware-independent; the kernel gain scales with bandwidth scarcity.
 
 | GPU | compute:BW | **A** baseline | **B** fused-dense | **D** SparseSAM 0.25 | **Kernel gain** | **Algo gain** |
