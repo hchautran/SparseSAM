@@ -283,6 +283,7 @@ SAM-HQ **ViT-L**, input 1024×1024, fp16 encoder, batch=1 unless noted. All numb
 
 ### Encoder speedup across GPUs
 
+
 Speedup orders **inversely with memory bandwidth** — SparseSAM wins most on low-power, bandwidth-limited inference GPUs.
 
 | GPU | BW | TDP | Baseline (ms) | d=0.75 | d=0.50 | **d=0.25** |
